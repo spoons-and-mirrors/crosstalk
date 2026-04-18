@@ -18,7 +18,7 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --external '@opencode-ai/plugin' --minify && tsc --emitDeclarationOnly",
     "prepublishOnly": "bun run build",
-    "test": "bun test",
+    "test": "bun test tests/index.test.ts tests/smoke.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import plugin from './index';
-import { roomPath } from './room';
-import { __resetForTests } from './test-support';
-import type { ConfigTransformOutput, MessagesTransformOutput, OpenCodeSessionClient } from './types';
+import plugin from '../src/index';
+import { roomPath } from '../src/room';
+import { __resetForTests } from '../src/test-support';
+import type { ConfigTransformOutput, MessagesTransformOutput, OpenCodeSessionClient } from '../src/types';
 
 type HookMap = Record<string, ((input: unknown, output?: unknown) => Promise<unknown>) | undefined> & {
   tool?: {
@@ -110,12 +110,9 @@ async function init() {
 
 async function runCommand(hooks: HookMap, input: { command: string; sessionID: string; arguments: string }, output?: CommandOut) {
   const out = output || { parts: [] };
-  let error: unknown;
   try {
     await hooks['command.execute.before']?.(input, out);
-  } catch (cause) {
-    error = cause;
-  }
+  } catch {}
   return out;
 }
 
