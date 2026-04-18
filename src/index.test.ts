@@ -18,6 +18,11 @@ type HookMap = Record<string, ((input: unknown, output?: unknown) => Promise<unk
   config?: (output: ConfigTransformOutput) => Promise<void>;
 };
 
+type PluginEvent = {
+  type: string;
+  properties: Record<string, unknown>;
+};
+
 type CommandOut = { parts: Array<{ type: string; text: string }> };
 type PromptRecord = {
   id: string;
@@ -123,11 +128,18 @@ async function runSystem(hooks: HookMap, sessionID: string, system: string[]) {
 }
 
 async function runStatus(hooks: HookMap, sessionID: string, type: 'idle' | 'busy' | 'retry') {
-  await hooks['session.status']?.({ sessionID, status: { type } });
+  const event: PluginEvent = { type: 'session.status', properties: { sessionID, status: { type } } };
+  await hooks.event?.({ event });
 }
 
 async function runIdle(hooks: HookMap, sessionID: string) {
-  await hooks['session.idle']?.({ sessionID });
+  const event: PluginEvent = { type: 'session.idle', properties: { sessionID } };
+  await hooks.event?.({ event });
+}
+
+async function runDeleted(hooks: HookMap, sessionID: string) {
+  const event: PluginEvent = { type: 'session.deleted', properties: { info: { id: sessionID } } };
+  await hooks.event?.({ event });
 }
 
 describe('crosstalk plugin', () => {
@@ -193,6 +205,22 @@ describe('crosstalk plugin', () => {
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'drop' }, out);
     expect(out.parts).toEqual([]);
     expect(prompts.at(-1)?.body.parts[0]).toEqual({ type: 'text', text: 'Dropped from crosstalk.', ignored: true });
+
+    const room = JSON.parse(await Bun.file(roomPath()).text()) as {
+      sessions: Record<string, unknown>;
+      messages: Array<{ toSessionId: string }>;
+    };
+    expect(room.sessions.s2).toBeUndefined();
+    expect(room.messages.some((item) => item.toSessionId === 's2')).toBe(false);
+  });
+
+  test('drops joined local state on session.deleted events', async () => {
+    const { hooks } = await init();
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join one' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join two' });
+    await hooks.tool!.broadcast.execute({ send_to: 'two', message: 'hello' }, toolContext('s1'));
+
+    await runDeleted(hooks, 's2');
 
     const room = JSON.parse(await Bun.file(roomPath()).text()) as {
       sessions: Record<string, unknown>;

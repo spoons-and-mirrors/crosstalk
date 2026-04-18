@@ -35,6 +35,7 @@ import type {
   LocalSession,
   MessagesTransformOutput,
   OpenCodeSessionClient,
+  PluginEvent,
   SessionDeletedInput,
   SessionIdleInput,
   SessionStatusInput,
@@ -166,6 +167,49 @@ function parseCommand(input: string): { action?: 'join' | 'drop'; name?: string 
 
 function commandText(text: string) {
   return [{ type: 'text', text }];
+}
+
+function statusEvent(event: PluginEvent): SessionStatusInput | undefined {
+  if (event.type !== 'session.status') {
+    return;
+  }
+
+  const properties = event.properties as { sessionID?: string; status?: SessionStatusInput['status'] };
+  if (!properties.sessionID || !properties.status) {
+    return;
+  }
+
+  return {
+    sessionID: properties.sessionID,
+    status: properties.status,
+  };
+}
+
+function idleEvent(event: PluginEvent): SessionIdleInput | undefined {
+  if (event.type !== 'session.idle') {
+    return;
+  }
+
+  const properties = event.properties as { sessionID?: string };
+  if (!properties.sessionID) {
+    return;
+  }
+
+  return { sessionID: properties.sessionID };
+}
+
+function deletedEvent(event: PluginEvent): SessionDeletedInput | undefined {
+  if (event.type !== 'session.deleted') {
+    return;
+  }
+
+  const properties = event.properties as { sessionID?: string; info?: { id?: string } };
+  const sessionID = properties.sessionID || properties.info?.id;
+  if (!sessionID) {
+    return;
+  }
+
+  return { sessionID };
 }
 
 async function sendIgnoredMessage(client: OpenCodeSessionClient, sessionId: string, text: string): Promise<void> {
@@ -349,39 +393,48 @@ const server: Plugin = async (ctx) => {
       );
     },
 
-    'session.status': async (input: SessionStatusInput) => {
-      const local = joined.get(input.sessionID);
-      if (!local) {
+    event: async ({ event }) => {
+      const status = statusEvent(event as PluginEvent);
+      if (status) {
+        const local = joined.get(status.sessionID);
+        if (!local) {
+          return;
+        }
+
+        joined.set(status.sessionID, {
+          alias: local.alias,
+          status: status.status.type === 'idle' ? 'idle' : 'busy',
+        });
+        await poll();
         return;
       }
 
-      joined.set(input.sessionID, {
-        alias: local.alias,
-        status: input.status.type === 'idle' ? 'idle' : 'busy',
-      });
-      await poll();
-    },
+      const idle = idleEvent(event as PluginEvent);
+      if (idle) {
+        const local = joined.get(idle.sessionID);
+        if (!local) {
+          return;
+        }
 
-    'session.idle': async (input: SessionIdleInput) => {
-      const local = joined.get(input.sessionID);
-      if (!local) {
+        joined.set(idle.sessionID, {
+          alias: local.alias,
+          status: 'idle',
+        });
+        await poll();
         return;
       }
 
-      joined.set(input.sessionID, {
-        alias: local.alias,
-        status: 'idle',
-      });
-      await poll();
-    },
-
-    'session.deleted': async (input: SessionDeletedInput) => {
-      if (!joined.has(input.sessionID)) {
+      const deleted = deletedEvent(event as PluginEvent);
+      if (!deleted) {
         return;
       }
 
-      joined.delete(input.sessionID);
-      await dropRoom(input.sessionID);
+      if (!joined.has(deleted.sessionID)) {
+        return;
+      }
+
+      joined.delete(deleted.sessionID);
+      await dropRoom(deleted.sessionID);
     },
   };
 };

@@ -109,6 +109,11 @@ export interface SessionDeletedInput {
   sessionID: string;
 }
 
+export interface PluginEvent {
+  type: string;
+  properties: unknown;
+}
+
 export interface SharedSession {
   sessionId: string;
   alias: string;
