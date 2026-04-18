@@ -19,7 +19,8 @@ export interface SessionMessage {
 }
 
 export interface PromptBody {
-  parts: Array<{ type: string; text?: string }>;
+  noReply?: boolean;
+  parts: Array<{ type: string; text?: string; ignored?: boolean }>;
   agent?: string;
   model?: { providerID?: string; modelID?: string };
 }
@@ -111,6 +112,7 @@ export interface SessionDeletedInput {
 export interface SharedSession {
   sessionId: string;
   alias: string;
+  ownerPid?: number;
   joinedAt: number;
   updatedAt: number;
   heartbeatAt: number;
@@ -127,6 +129,7 @@ export interface SharedMessage {
   toSessionId: string;
   body: string;
   createdAt: number;
+  wakeAt?: number;
   handledAt?: number;
   presentedAt?: number;
 }

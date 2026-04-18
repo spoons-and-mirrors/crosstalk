@@ -10,6 +10,7 @@ const LOCK_RETRY_MS = 50;
 const SESSION_TTL_MS = 30000;
 const MESSAGE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_STATUS_HISTORY = 50;
+const WAKE_RETRY_MS = 5000;
 
 function roomDir(): string {
   return process.env.OPENCODE_CROSSTALK_DIR || path.join(process.env.HOME || '', '.local', 'state', 'opencode-crosstalk');
@@ -52,7 +53,24 @@ function cleanName(name?: string): string {
 }
 
 function roomActive(session: SharedSession, now: number): boolean {
+  if (session.ownerPid && !processAlive(session.ownerPid)) {
+    return false;
+  }
+
   return now - session.heartbeatAt <= SESSION_TTL_MS;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'EPERM') {
+      return true;
+    }
+
+    return false;
+  }
 }
 
 function cleanupRoom(room: SharedRoom): void {
@@ -215,6 +233,7 @@ export async function joinRoom(sessionId: string, wanted?: string): Promise<stri
     room.sessions[sessionId] = {
       sessionId,
       alias,
+      ownerPid: process.pid,
       joinedAt: current?.joinedAt || now,
       updatedAt: now,
       heartbeatAt: now,
@@ -257,7 +276,14 @@ export async function sendMessage(
   sessionId: string,
   targetAlias: string,
   message: string,
-): Promise<{ self?: SharedSession; peers: SharedSession[]; sentTo?: string; error?: string }> {
+): Promise<{
+  self?: SharedSession;
+  peers: SharedSession[];
+  sentTo?: string;
+  targetSessionId?: string;
+  msgIndex?: number;
+  error?: string;
+}> {
   return mutateRoom((room) => {
     const self = room.sessions[sessionId];
     if (!self) {
@@ -275,11 +301,12 @@ export async function sendMessage(
     }
 
     const now = roomNow();
+    const msgIndex = target.nextMessage;
     self.updatedAt = now;
     self.heartbeatAt = now;
     room.messages.push({
       id: nextInternalId(),
-      msgIndex: target.nextMessage,
+      msgIndex,
       fromSessionId: sessionId,
       from: self.alias,
       toSessionId: target.sessionId,
@@ -288,7 +315,7 @@ export async function sendMessage(
     });
     target.nextMessage += 1;
     target.updatedAt = now;
-    return { self, peers: peerList(room, sessionId), sentTo: target.alias };
+    return { self, peers: peerList(room, sessionId), sentTo: target.alias, targetSessionId: target.sessionId, msgIndex };
   });
 }
 
@@ -334,7 +361,30 @@ export async function markPresented(sessionId: string, msgIndices: number[]): Pr
       if (message.presentedAt) {
         continue;
       }
+      message.wakeAt = now;
       message.presentedAt = now;
+    }
+  });
+}
+
+export async function markWake(sessionId: string, msgIndices: number[]): Promise<void> {
+  if (msgIndices.length === 0) {
+    return;
+  }
+
+  await mutateRoom((room) => {
+    const now = roomNow();
+    for (const message of room.messages) {
+      if (message.toSessionId !== sessionId) {
+        continue;
+      }
+      if (message.handledAt || message.presentedAt) {
+        continue;
+      }
+      if (!msgIndices.includes(message.msgIndex)) {
+        continue;
+      }
+      message.wakeAt = now;
     }
   });
 }
@@ -349,6 +399,7 @@ export async function syncLocalSessions(local: Map<string, LocalSession>): Promi
         continue;
       }
       self.alias = state.alias;
+      self.ownerPid = process.pid;
       self.status = state.status;
       self.updatedAt = now;
       self.heartbeatAt = now;
@@ -362,7 +413,10 @@ export async function syncLocalSessions(local: Map<string, LocalSession>): Promi
 
       const unseen = room.messages.filter(
         (message) =>
-          message.toSessionId === sessionId && !message.handledAt && message.presentedAt === undefined,
+          message.toSessionId === sessionId &&
+          !message.handledAt &&
+          message.presentedAt === undefined &&
+          (!message.wakeAt || now - message.wakeAt >= WAKE_RETRY_MS),
       );
       if (unseen.length === 0) {
         continue;

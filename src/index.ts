@@ -1,9 +1,10 @@
-// This file wires the crosstalk plugin together: command handling, prompt injection, broadcast, and wake-ups.
+// This file exposes the crosstalk server plugin and wires command handling, prompt injection, broadcast, and wake-ups.
 
-import type { Plugin } from '@opencode-ai/plugin';
+import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin';
 import {
   BROADCAST_DESCRIPTION,
+  JOIN_USAGE,
   MISSING_MESSAGE,
   NOT_JOINED,
   SELF_MESSAGE,
@@ -11,6 +12,7 @@ import {
   UNKNOWN_REPLY,
   broadcastResult,
   createInboxMessage,
+  joinResult,
   normalizeMessage,
   unknownRecipient,
   wakePrompt,
@@ -20,6 +22,7 @@ import {
   getRoomView,
   handleReply,
   joinRoom,
+  markWake,
   markPresented,
   sendMessage,
   syncLocalSessions,
@@ -39,28 +42,26 @@ import type {
   SystemTransformOutput,
   ToolContext,
 } from './types';
+import { getClient, getPoller, joined, setClient, setPoller, waking } from './memory';
 
 const POLL_INTERVAL_MS = 1500;
-
-const joined = new Map<string, LocalSession>();
-const waking = new Set<string>();
-let poller: ReturnType<typeof setInterval> | undefined;
-let storedClient: OpenCodeSessionClient | undefined;
+const COMMAND_HANDLED = '__CROSSTALK_COMMAND_HANDLED__';
 
 function wakeKey(sessionId: string, msgIndex: number): string {
   return `${sessionId}:${msgIndex}`;
 }
 
 function ensurePoller(client: OpenCodeSessionClient): void {
-  storedClient = client;
-  if (poller) {
+  setClient(client);
+  if (getPoller()) {
     return;
   }
 
-  poller = setInterval(() => {
+  const poller = setInterval(() => {
     void poll();
   }, POLL_INTERVAL_MS);
   poller.unref?.();
+  setPoller(poller);
 }
 
 async function readSessionModel(client: OpenCodeSessionClient, sessionId: string) {
@@ -88,8 +89,19 @@ async function readSessionModel(client: OpenCodeSessionClient, sessionId: string
 
 async function wakeSession(client: OpenCodeSessionClient, sessionId: string, from: string): Promise<void> {
   const model = await readSessionModel(client, sessionId);
-  const send = client.session.promptAsync || client.session.prompt;
-  await send({
+  if (client.session.promptAsync) {
+    await client.session.promptAsync({
+      path: { id: sessionId },
+      body: {
+        parts: [{ type: 'text', text: wakePrompt(from) }],
+        agent: model.agent,
+        model: model.model,
+      },
+    });
+    return;
+  }
+
+  await client.session.prompt({
     path: { id: sessionId },
     body: {
       parts: [{ type: 'text', text: wakePrompt(from) }],
@@ -100,7 +112,8 @@ async function wakeSession(client: OpenCodeSessionClient, sessionId: string, fro
 }
 
 async function poll(): Promise<void> {
-  if (!storedClient) {
+  const client = getClient();
+  if (!client) {
     return;
   }
 
@@ -120,8 +133,8 @@ async function poll(): Promise<void> {
     }
 
     try {
-      await wakeSession(storedClient, candidate.sessionId, candidate.from);
-      await markPresented(candidate.sessionId, pending);
+      await wakeSession(client, candidate.sessionId, candidate.from);
+      await markWake(candidate.sessionId, pending);
     } finally {
       for (const msgIndex of pending) {
         waking.delete(wakeKey(candidate.sessionId, msgIndex));
@@ -155,6 +168,16 @@ function commandText(text: string) {
   return [{ type: 'text', text }];
 }
 
+async function sendIgnoredMessage(client: OpenCodeSessionClient, sessionId: string, text: string): Promise<void> {
+  await client.session.prompt({
+    path: { id: sessionId },
+    body: {
+      noReply: true,
+      parts: [{ type: 'text', text, ignored: true }],
+    },
+  });
+}
+
 function setJoined(sessionId: string, alias: string): void {
   const current = joined.get(sessionId);
   joined.set(sessionId, {
@@ -163,7 +186,22 @@ function setJoined(sessionId: string, alias: string): void {
   });
 }
 
-function createBroadcastTool() {
+async function wakeLocal(client: OpenCodeSessionClient, sessionId: string, msgIndex: number, from: string): Promise<void> {
+  const key = wakeKey(sessionId, msgIndex);
+  if (waking.has(key)) {
+    return;
+  }
+
+  waking.add(key);
+  try {
+    await wakeSession(client, sessionId, from);
+    await markWake(sessionId, [msgIndex]);
+  } finally {
+    waking.delete(key);
+  }
+}
+
+function createBroadcastTool(client: OpenCodeSessionClient) {
   return tool({
     description: BROADCAST_DESCRIPTION,
     args: {
@@ -209,18 +247,23 @@ function createBroadcastTool() {
       if (sent.error === 'unknown-recipient') {
         return unknownRecipient(target, sent.peers);
       }
+
+      if (sent.targetSessionId && sent.msgIndex !== undefined && joined.has(sent.targetSessionId)) {
+        await wakeLocal(client, sent.targetSessionId, sent.msgIndex, sent.self.alias);
+      }
+
       return broadcastResult(sent.self.alias, sent.peers, sent.sentTo ? [sent.sentTo] : [], handled);
     },
   });
 }
 
-const plugin: Plugin = async (ctx) => {
+const server: Plugin = async (ctx) => {
   const client = ctx.client as unknown as OpenCodeSessionClient;
   ensurePoller(client);
 
   return {
     tool: {
-      broadcast: createBroadcastTool(),
+      broadcast: createBroadcastTool(client),
     },
 
     config: async (input: ConfigTransformOutput) => {
@@ -239,29 +282,30 @@ const plugin: Plugin = async (ctx) => {
       };
     },
 
-    'command.execute.before': async (input: CommandInput, output: CommandOutput) => {
+    'command.execute.before': async (input: CommandInput, _output: CommandOutput) => {
       if (input.command !== 'crosstalk') {
         return;
       }
 
-      output.parts.length = 0;
       const parsed = parseCommand(input.arguments);
       if (parsed.action === 'join') {
         const alias = await joinRoom(input.sessionID, parsed.name);
         setJoined(input.sessionID, alias);
         await poll();
-        output.parts.push(...commandText(`Joined crosstalk as ${alias}.`));
-        return;
+        const view = await getRoomView(input.sessionID);
+        await sendIgnoredMessage(client, input.sessionID, joinResult(alias, view.peers));
+        throw new Error(COMMAND_HANDLED);
       }
 
       if (parsed.action === 'drop') {
         joined.delete(input.sessionID);
         await dropRoom(input.sessionID);
-        output.parts.push(...commandText('Dropped from crosstalk.'));
-        return;
+        await sendIgnoredMessage(client, input.sessionID, 'Dropped from crosstalk.');
+        throw new Error(COMMAND_HANDLED);
       }
 
-      output.parts.push(...commandText('Usage: /crosstalk join [name...] or /crosstalk drop'));
+      await sendIgnoredMessage(client, input.sessionID, JOIN_USAGE);
+      throw new Error(COMMAND_HANDLED);
     },
 
     'experimental.chat.system.transform': async (
@@ -342,15 +386,9 @@ const plugin: Plugin = async (ctx) => {
   };
 };
 
-export default plugin;
+const plugin: PluginModule = {
+  id: 'crosstalk',
+  server,
+};
 
-export function __resetForTests(): void {
-  joined.clear();
-  waking.clear();
-  storedClient = undefined;
-  if (!poller) {
-    return;
-  }
-  clearInterval(poller);
-  poller = undefined;
-}
+export default plugin;

@@ -39,6 +39,22 @@ export const SELF_MESSAGE = "Warning: You cannot send a message to yourself.";
 export const MISSING_MESSAGE = "Error: 'message' parameter is required.";
 export const UNKNOWN_REPLY = "Error: Unknown reply target.";
 
+export function joinResult(self: string, peers: SharedSession[]): string {
+  const lines = [`Joined crosstalk as ${self}.`];
+
+  if (peers.length === 0) {
+    lines.push('', 'No other joined sessions yet.');
+    return lines.join('\n');
+  }
+
+  lines.push('', 'Other joined sessions:');
+  for (const peer of peers) {
+    lines.push(`- ${peer.alias}`);
+  }
+
+  return lines.join('\n');
+}
+
 export function normalizeMessage(text: string, max: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= max) {

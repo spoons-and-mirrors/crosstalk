@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import plugin, { __resetForTests } from './index';
+import plugin from './index';
 import { roomPath } from './room';
+import { __resetForTests } from './test-support';
 import type { ConfigTransformOutput, MessagesTransformOutput, OpenCodeSessionClient } from './types';
 
 type HookMap = Record<string, ((input: unknown, output?: unknown) => Promise<unknown>) | undefined> & {
@@ -20,7 +21,7 @@ type HookMap = Record<string, ((input: unknown, output?: unknown) => Promise<unk
 type CommandOut = { parts: Array<{ type: string; text: string }> };
 type PromptRecord = {
   id: string;
-  body: { parts: Array<{ type: string; text?: string }>; agent?: string; model?: unknown };
+  body: { noReply?: boolean; parts: Array<{ type: string; text?: string; ignored?: boolean }>; agent?: string; model?: unknown };
 };
 
 function message(sessionID: string, text: string, extra?: { agent?: string; model?: { providerID?: string; modelID?: string } }) {
@@ -56,21 +57,23 @@ function createClient() {
   const prompts: PromptRecord[] = [];
   const history = new Map<string, ReturnType<typeof message>[]>();
 
-  const client: OpenCodeSessionClient = {
-    session: {
-      async prompt(params) {
-        prompts.push({ id: params.path.id, body: params.body });
-        return { data: {} };
-      },
-      async promptAsync(params) {
-        prompts.push({ id: params.path.id, body: params.body });
-        return { data: {} };
-      },
-      async messages(params) {
-        return { data: history.get(params.path.id) || [] };
-      },
+  const session = {
+    calls: prompts,
+    history,
+    async prompt(this: { calls: PromptRecord[] }, params: { path: { id: string }; body: PromptRecord['body'] }) {
+      this.calls.push({ id: params.path.id, body: params.body });
+      return { data: {} };
+    },
+    async promptAsync(this: { calls: PromptRecord[] }, params: { path: { id: string }; body: PromptRecord['body'] }) {
+      this.calls.push({ id: params.path.id, body: params.body });
+      return { data: {} };
+    },
+    async messages(this: { history: Map<string, ReturnType<typeof message>[]> }, params: { path: { id: string } }) {
+      return { data: this.history.get(params.path.id) || [] };
     },
   };
+
+  const client: OpenCodeSessionClient = { session };
 
   return {
     client,
@@ -83,7 +86,7 @@ async function init() {
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'crosstalk-test-'));
   process.env.OPENCODE_CROSSTALK_DIR = testDir;
   const api = createClient();
-  const hooks = (await plugin({
+  const hooks = (await plugin.server({
     client: api.client as never,
     directory: testDir,
     worktree: testDir,
@@ -102,7 +105,12 @@ async function init() {
 
 async function runCommand(hooks: HookMap, input: { command: string; sessionID: string; arguments: string }, output?: CommandOut) {
   const out = output || { parts: [] };
-  await hooks['command.execute.before']?.(input, out);
+  let error: unknown;
+  try {
+    await hooks['command.execute.before']?.(input, out);
+  } catch (cause) {
+    error = cause;
+  }
   return out;
 }
 
@@ -149,15 +157,23 @@ describe('crosstalk plugin', () => {
   });
 
   test('joins with requested alias and auto-suffixes duplicates', async () => {
-    const { hooks } = await init();
+    const { hooks, prompts } = await init();
     const outA = { parts: [{ type: 'text', text: 'seed' }] };
     const outB = { parts: [{ type: 'text', text: 'seed' }] };
 
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join writer' }, outA);
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join writer' }, outB);
 
-    expect(outA.parts).toEqual([{ type: 'text', text: 'Joined crosstalk as writer.' }]);
-    expect(outB.parts).toEqual([{ type: 'text', text: 'Joined crosstalk as writer-2.' }]);
+    expect(outA.parts).toEqual([{ type: 'text', text: 'seed' }]);
+    expect(outB.parts).toEqual([{ type: 'text', text: 'seed' }]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0].body.noReply).toBe(true);
+    expect(prompts[0].body.parts[0]).toEqual({ type: 'text', text: 'Joined crosstalk as writer.\n\nNo other joined sessions yet.', ignored: true });
+    expect(prompts[1].body.parts[0]).toEqual({
+      type: 'text',
+      text: 'Joined crosstalk as writer-2.\n\nOther joined sessions:\n- writer',
+      ignored: true,
+    });
 
     const room = JSON.parse(await Bun.file(roomPath()).text()) as {
       sessions: Record<string, { alias: string }>;
@@ -167,7 +183,7 @@ describe('crosstalk plugin', () => {
   });
 
   test('drops a joined session and removes its pending messages', async () => {
-    const { hooks } = await init();
+    const { hooks, prompts } = await init();
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join one' });
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join two' });
 
@@ -175,7 +191,8 @@ describe('crosstalk plugin', () => {
     expect(typeof sent).toBe('string');
     const out = { parts: [] as Array<{ type: string; text: string }> };
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'drop' }, out);
-    expect(out.parts).toEqual([{ type: 'text', text: 'Dropped from crosstalk.' }]);
+    expect(out.parts).toEqual([]);
+    expect(prompts.at(-1)?.body.parts[0]).toEqual({ type: 'text', text: 'Dropped from crosstalk.', ignored: true });
 
     const room = JSON.parse(await Bun.file(roomPath()).text()) as {
       sessions: Record<string, unknown>;
@@ -307,21 +324,77 @@ describe('crosstalk plugin', () => {
     await hooks.tool!.broadcast.execute({ send_to: 'sleeper', message: 'wake up please' }, toolContext('s1'));
     await runIdle(hooks, 's2');
 
+    const wake = prompts.find((item) => item.body.parts[0].text?.includes('New message from sender'));
+    expect(wake).toBeDefined();
+    expect(wake?.id).toBe('s2');
+    expect(wake?.body.parts[0].text).toContain('New message from sender');
+    expect(wake?.body.agent).toBe('build');
+    expect(wake?.body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-4' });
+  });
+
+  test('wakes local joined recipients immediately on direct send', async () => {
+    const { hooks, history, prompts } = await init();
+    history.set('s2', [message('s2', 'prior user', { agent: 'build', model: { providerID: 'openai', modelID: 'gpt-5.4' } })]);
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join sender' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join receiver' });
+    prompts.length = 0;
+
+    await hooks.tool!.broadcast.execute({ send_to: 'receiver', message: 'hello now' }, toolContext('s1'));
+
     expect(prompts).toHaveLength(1);
     expect(prompts[0].id).toBe('s2');
     expect(prompts[0].body.parts[0].text).toContain('New message from sender');
-    expect(prompts[0].body.agent).toBe('build');
-    expect(prompts[0].body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-4' });
   });
 
-  test('usage and join command output mutate prompt parts but do not create a true command cancellation primitive', async () => {
+  test('cleans dead process sessions on join so old peers do not linger after restart', async () => {
     const { hooks } = await init();
+    await fs.writeFile(
+      roomPath(),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          stale: {
+            sessionId: 'stale',
+            alias: 'ghost',
+            ownerPid: 999999,
+            joinedAt: Date.now(),
+            updatedAt: Date.now(),
+            heartbeatAt: Date.now(),
+            status: 'idle',
+            history: [],
+            nextMessage: 1,
+          },
+        },
+        messages: [],
+      }),
+    );
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join live' });
+
+    const room = JSON.parse(await Bun.file(roomPath()).text()) as {
+      sessions: Record<string, { alias: string }>;
+    };
+    expect(Object.keys(room.sessions)).toEqual(['s1']);
+    expect(room.sessions.s1.alias).toBe('live');
+  });
+
+  test('command handler uses ignored noReply prompts instead of mutating command parts', async () => {
+    const { hooks, prompts } = await init();
     const usage = { parts: [{ type: 'text', text: 'seed' }] };
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'wat' }, usage);
-    expect(usage.parts).toEqual([{ type: 'text', text: 'Usage: /crosstalk join [name...] or /crosstalk drop' }]);
+    expect(usage.parts).toEqual([{ type: 'text', text: 'seed' }]);
+    expect(prompts[0].body).toEqual({
+      noReply: true,
+      parts: [{ type: 'text', text: 'Usage: /crosstalk join [name...] or /crosstalk drop', ignored: true }],
+    });
 
     const join = { parts: [{ type: 'text', text: 'template text' }] };
     await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join local name' }, join);
-    expect(join.parts).toEqual([{ type: 'text', text: 'Joined crosstalk as local name.' }]);
+    expect(join.parts).toEqual([{ type: 'text', text: 'template text' }]);
+    expect(prompts[1].body).toEqual({
+      noReply: true,
+      parts: [{ type: 'text', text: 'Joined crosstalk as local name.\n\nNo other joined sessions yet.', ignored: true }],
+    });
   });
 });
