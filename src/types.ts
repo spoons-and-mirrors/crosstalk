@@ -117,6 +117,7 @@ export interface PluginEvent {
 export interface SharedSession {
   sessionId: string;
   alias: string;
+  room: string;
   ownerPid?: number;
   joinedAt: number;
   updatedAt: number;
@@ -147,6 +148,7 @@ export interface SharedRoom {
 
 export interface RoomView {
   self?: SharedSession;
+  room?: string;
   peers: SharedSession[];
   messages: SharedMessage[];
 }

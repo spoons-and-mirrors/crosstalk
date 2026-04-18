@@ -3,7 +3,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { HandledMessage, LocalSession, RoomView, SharedMessage, SharedRoom, SharedSession, WakeCandidate } from './types';
-import { MAX_MESSAGE_LENGTH, MAX_STATUS_LENGTH, normalizeMessage } from './prompts';
+import { DEFAULT_ROOM, MAX_MESSAGE_LENGTH, MAX_STATUS_LENGTH, normalizeMessage } from './prompts';
 
 const LOCK_STALE_MS = 10000;
 const LOCK_RETRY_MS = 50;
@@ -50,6 +50,14 @@ function cleanName(name?: string): string {
     return value;
   }
   return value.slice(0, 80).trim() || 'session';
+}
+
+function cleanRoom(name?: string): string {
+  const value = name?.replace(/\s+/g, ' ').trim() || DEFAULT_ROOM;
+  if (value.length <= 80) {
+    return value;
+  }
+  return value.slice(0, 80).trim() || DEFAULT_ROOM;
 }
 
 function roomActive(session: SharedSession, now: number): boolean {
@@ -116,6 +124,9 @@ async function readRoomFile(): Promise<SharedRoom> {
     if (parsed.version !== 1 || typeof parsed.sessions !== 'object' || !Array.isArray(parsed.messages)) {
       return emptyRoom();
     }
+    for (const session of Object.values(parsed.sessions)) {
+      session.room = cleanRoom(session.room);
+    }
     return parsed;
   } catch (error) {
     if (isNodeError(error) && error.code === 'ENOENT') {
@@ -172,11 +183,11 @@ async function mutateRoom<T>(apply: (room: SharedRoom) => Promise<T> | T): Promi
   }
 }
 
-function uniqueAlias(room: SharedRoom, base: string, sessionId: string): string {
+function uniqueAlias(room: SharedRoom, base: string, sessionId: string, roomName: string): string {
   const name = cleanName(base);
   const taken = new Set(
     Object.values(room.sessions)
-      .filter((session) => session.sessionId !== sessionId)
+      .filter((session) => session.sessionId !== sessionId && session.room === roomName)
       .map((session) => session.alias.toLowerCase()),
   );
 
@@ -194,16 +205,19 @@ function uniqueAlias(room: SharedRoom, base: string, sessionId: string): string 
   return `${name}-${Date.now()}`;
 }
 
-function peerList(room: SharedRoom, sessionId: string): SharedSession[] {
+function peerList(room: SharedRoom, sessionId: string, roomName?: string): SharedSession[] {
+  const ownRoom = roomName || room.sessions[sessionId]?.room || DEFAULT_ROOM;
   return Object.values(room.sessions)
-    .filter((session) => session.sessionId !== sessionId)
+    .filter((session) => session.sessionId !== sessionId && session.room === ownRoom)
     .sort((left, right) => left.alias.localeCompare(right.alias));
 }
 
 function roomView(room: SharedRoom, sessionId: string): RoomView {
+  const self = room.sessions[sessionId];
   return {
-    self: room.sessions[sessionId],
-    peers: peerList(room, sessionId),
+    self,
+    room: self?.room,
+    peers: peerList(room, sessionId, self?.room),
     messages: room.messages
       .filter((message) => message.toSessionId === sessionId && !message.handledAt)
       .sort((left, right) => left.msgIndex - right.msgIndex),
@@ -214,9 +228,9 @@ function nextInternalId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function findByAlias(room: SharedRoom, alias: string): SharedSession | undefined {
+function findByAlias(room: SharedRoom, alias: string, roomName: string): SharedSession | undefined {
   const wanted = alias.trim().toLowerCase();
-  return Object.values(room.sessions).find((session) => session.alias.toLowerCase() === wanted);
+  return Object.values(room.sessions).find((session) => session.room === roomName && session.alias.toLowerCase() === wanted);
 }
 
 export async function getRoomView(sessionId: string): Promise<RoomView> {
@@ -225,23 +239,34 @@ export async function getRoomView(sessionId: string): Promise<RoomView> {
   return roomView(room, sessionId);
 }
 
-export async function joinRoom(sessionId: string, wanted?: string): Promise<string> {
+export async function joinRoom(sessionId: string, wanted?: string, roomName?: string): Promise<{ alias: string; room: string }> {
   return mutateRoom((room) => {
     const now = roomNow();
     const current = room.sessions[sessionId];
-    const alias = uniqueAlias(room, wanted || current?.alias || 'session', sessionId);
+    const nextRoom = cleanRoom(roomName || current?.room || DEFAULT_ROOM);
+    const previousRoom = current?.room || DEFAULT_ROOM;
+    const moved = previousRoom !== nextRoom;
+    const alias = uniqueAlias(room, wanted || current?.alias || 'session', sessionId, nextRoom);
+
+    if (moved) {
+      room.messages = room.messages.filter(
+        (message) => message.toSessionId !== sessionId && message.fromSessionId !== sessionId,
+      );
+    }
+
     room.sessions[sessionId] = {
       sessionId,
       alias,
+      room: nextRoom,
       ownerPid: process.pid,
       joinedAt: current?.joinedAt || now,
       updatedAt: now,
       heartbeatAt: now,
       status: current?.status || 'idle',
-      history: current?.history || [],
-      nextMessage: current?.nextMessage || 1,
+      history: moved ? [] : current?.history || [],
+      nextMessage: moved ? 1 : current?.nextMessage || 1,
     };
-    return alias;
+    return { alias, room: nextRoom };
   });
 }
 
@@ -290,8 +315,8 @@ export async function sendMessage(
       return { self: undefined, peers: [], error: 'not-joined' };
     }
 
-    const target = findByAlias(room, targetAlias);
-    const peers = peerList(room, sessionId);
+    const target = findByAlias(room, targetAlias, self.room);
+    const peers = peerList(room, sessionId, self.room);
     if (!target) {
       return { self, peers, error: 'unknown-recipient' };
     }
@@ -315,7 +340,13 @@ export async function sendMessage(
     });
     target.nextMessage += 1;
     target.updatedAt = now;
-    return { self, peers: peerList(room, sessionId), sentTo: target.alias, targetSessionId: target.sessionId, msgIndex };
+    return {
+      self,
+      peers: peerList(room, sessionId, self.room),
+      sentTo: target.alias,
+      targetSessionId: target.sessionId,
+      msgIndex,
+    };
   });
 }
 

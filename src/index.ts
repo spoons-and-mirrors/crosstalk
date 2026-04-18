@@ -12,8 +12,10 @@ import {
   UNKNOWN_REPLY,
   broadcastResult,
   createInboxMessage,
+  inboxResult,
   joinResult,
   normalizeMessage,
+  statusResult,
   unknownRecipient,
   wakePrompt,
 } from './prompts';
@@ -32,7 +34,6 @@ import type {
   CommandInput,
   CommandOutput,
   ConfigTransformOutput,
-  LocalSession,
   MessagesTransformOutput,
   OpenCodeSessionClient,
   PluginEvent,
@@ -144,29 +145,58 @@ async function poll(): Promise<void> {
   }
 }
 
-function parseCommand(input: string): { action?: 'join' | 'drop'; name?: string } {
+function parseCommand(input: string):
+  | { action?: undefined }
+  | { action: 'drop' | 'status' | 'inbox' }
+  | { action: 'join'; name?: string; room?: string } {
   const trimmed = input.trim();
   if (!trimmed) {
     return {};
+  }
+
+  if (trimmed === 'status') {
+    return { action: 'status' };
+  }
+
+  if (trimmed === 'inbox') {
+    return { action: 'inbox' };
   }
 
   if (trimmed === 'drop') {
     return { action: 'drop' };
   }
 
-  if (trimmed === 'join') {
+  if (!trimmed.startsWith('join')) {
+    return {};
+  }
+
+  const rest = trimmed.slice(4).trim();
+  if (!rest) {
     return { action: 'join' };
   }
 
-  if (trimmed.startsWith('join ')) {
-    return { action: 'join', name: trimmed.slice(5) };
+  const tokens = rest.split(/\s+/);
+  const parts: string[] = [];
+  let room: string | undefined;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '--room') {
+      room = tokens[index + 1];
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('--room=')) {
+      room = token.slice(7);
+      continue;
+    }
+    parts.push(token);
   }
 
-  return {};
-}
-
-function commandText(text: string) {
-  return [{ type: 'text', text }];
+  return {
+    action: 'join',
+    room,
+    name: parts.length > 0 ? parts.join(' ') : undefined,
+  };
 }
 
 function statusEvent(event: PluginEvent): SessionStatusInput | undefined {
@@ -231,6 +261,11 @@ function setJoined(sessionId: string, alias: string): void {
 }
 
 async function wakeLocal(client: OpenCodeSessionClient, sessionId: string, msgIndex: number, from: string): Promise<void> {
+  const local = joined.get(sessionId);
+  if (!local || local.status !== 'idle') {
+    return;
+  }
+
   const key = wakeKey(sessionId, msgIndex);
   if (waking.has(key)) {
     return;
@@ -333,11 +368,15 @@ const server: Plugin = async (ctx) => {
 
       const parsed = parseCommand(input.arguments);
       if (parsed.action === 'join') {
-        const alias = await joinRoom(input.sessionID, parsed.name);
-        setJoined(input.sessionID, alias);
+        const joinedRoom = await joinRoom(input.sessionID, parsed.name, parsed.room);
+        setJoined(input.sessionID, joinedRoom.alias);
         await poll();
         const view = await getRoomView(input.sessionID);
-        await sendIgnoredMessage(client, input.sessionID, joinResult(alias, view.peers));
+        await sendIgnoredMessage(
+          client,
+          input.sessionID,
+          joinResult(joinedRoom.alias, view.room || joinedRoom.room, view.peers, view.messages),
+        );
         throw new Error(COMMAND_HANDLED);
       }
 
@@ -345,6 +384,32 @@ const server: Plugin = async (ctx) => {
         joined.delete(input.sessionID);
         await dropRoom(input.sessionID);
         await sendIgnoredMessage(client, input.sessionID, 'Dropped from crosstalk.');
+        throw new Error(COMMAND_HANDLED);
+      }
+
+      if (parsed.action === 'status') {
+        const view = await getRoomView(input.sessionID);
+        if (!view.self || !view.room) {
+          await sendIgnoredMessage(client, input.sessionID, NOT_JOINED);
+          throw new Error(COMMAND_HANDLED);
+        }
+
+        await sendIgnoredMessage(client, input.sessionID, statusResult(view.self.alias, view.room, view.peers, view.messages));
+        throw new Error(COMMAND_HANDLED);
+      }
+
+      if (parsed.action === 'inbox') {
+        const view = await getRoomView(input.sessionID);
+        if (!view.self || !view.room) {
+          await sendIgnoredMessage(client, input.sessionID, NOT_JOINED);
+          throw new Error(COMMAND_HANDLED);
+        }
+
+        await markPresented(
+          input.sessionID,
+          view.messages.map((message) => message.msgIndex),
+        );
+        await sendIgnoredMessage(client, input.sessionID, inboxResult(view.self.alias, view.room, view.messages));
         throw new Error(COMMAND_HANDLED);
       }
 

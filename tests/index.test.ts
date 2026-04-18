@@ -177,10 +177,14 @@ describe('crosstalk plugin', () => {
     expect(outB.parts).toEqual([{ type: 'text', text: 'seed' }]);
     expect(prompts).toHaveLength(2);
     expect(prompts[0].body.noReply).toBe(true);
-    expect(prompts[0].body.parts[0]).toEqual({ type: 'text', text: 'Joined crosstalk as writer.\n\nNo other joined sessions yet.', ignored: true });
+    expect(prompts[0].body.parts[0]).toEqual({
+      type: 'text',
+      text: 'Joined crosstalk room default as writer.\n\nOpen messages: 0\n\nNo other joined sessions yet.',
+      ignored: true,
+    });
     expect(prompts[1].body.parts[0]).toEqual({
       type: 'text',
-      text: 'Joined crosstalk as writer-2.\n\nOther joined sessions:\n- writer',
+      text: 'Joined crosstalk room default as writer-2.\n\nOpen messages: 0\n\nOther joined sessions:\n- writer (idle)',
       ignored: true,
     });
 
@@ -245,6 +249,62 @@ describe('crosstalk plugin', () => {
     expect(payload.sessions).toEqual([
       { name: 'alpha', status: ['thinking about parser edge cases'], idle: true },
     ]);
+  });
+
+  test('status command shows room peers and unread count', async () => {
+    const { hooks, prompts } = await init();
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join alpha' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join beta' });
+    await hooks.tool!.broadcast.execute({ message: 'reviewing migrations' }, toolContext('s1'));
+    prompts.length = 0;
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'status' });
+
+    expect(prompts[0].body.parts[0]).toEqual({
+      type: 'text',
+      text: 'You are: beta\nRoom: default\nOpen messages: 0\n\nOther joined sessions:\n- alpha (idle)\n  -> reviewing migrations',
+      ignored: true,
+    });
+  });
+
+  test('inbox command shows unread message contents and marks them presented', async () => {
+    const { hooks, prompts } = await init();
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join sender' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join receiver' });
+    await hooks.tool!.broadcast.execute({ send_to: 'receiver', message: 'please inspect the failing test' }, toolContext('s1'));
+    prompts.length = 0;
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'inbox' });
+
+    expect(prompts[0].body.parts[0]).toEqual({
+      type: 'text',
+      text: 'Broadcast inbox for receiver\nRoom: default\n\nOpen messages:\n- #1 from sender: "please inspect the failing test"',
+      ignored: true,
+    });
+
+    const output: MessagesTransformOutput = {
+      messages: [message('s2', 'next turn')],
+    };
+    await runMessages(hooks, output);
+    const payload = JSON.parse((output.messages[1] as { parts: Array<{ state: { output: string } }> }).parts[0].state.output);
+    expect(payload.messages).toEqual([{ id: 1, from: 'sender', content: 'please inspect the failing test' }]);
+  });
+
+  test('join supports named rooms and isolates peers by room', async () => {
+    const { hooks, prompts } = await init();
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join --room red alpha' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join --room blue beta' });
+    prompts.length = 0;
+
+    const result = await hooks.tool!.broadcast.execute({ send_to: 'beta', message: 'hello' }, toolContext('s1'));
+    expect(result).toBe('Error: Unknown recipient "beta". No other joined sessions are available.');
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's3', arguments: 'join --room red gamma' });
+    expect(prompts[0].body.parts[0]).toEqual({
+      type: 'text',
+      text: 'Joined crosstalk room red as gamma.\n\nOpen messages: 0\n\nOther joined sessions:\n- alpha (idle)',
+      ignored: true,
+    });
   });
 
   test('send_to uses the joined visible session name', async () => {
@@ -372,6 +432,27 @@ describe('crosstalk plugin', () => {
     expect(prompts[0].body.parts[0].text).toContain('New message from sender');
   });
 
+  test('does not inject a wake prompt for local busy recipients', async () => {
+    const { hooks, history, prompts } = await init();
+    history.set('s2', [message('s2', 'prior user', { agent: 'build', model: { providerID: 'openai', modelID: 'gpt-5.4' } })]);
+
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's1', arguments: 'join sender' });
+    await runCommand(hooks, { command: 'crosstalk', sessionID: 's2', arguments: 'join receiver' });
+    await runStatus(hooks, 's2', 'busy');
+    prompts.length = 0;
+
+    await hooks.tool!.broadcast.execute({ send_to: 'receiver', message: 'hello while busy' }, toolContext('s1'));
+
+    expect(prompts).toEqual([]);
+
+    const output: MessagesTransformOutput = {
+      messages: [message('s2', 'next user turn')],
+    };
+    await runMessages(hooks, output);
+    const payload = JSON.parse((output.messages[1] as { parts: Array<{ state: { output: string } }> }).parts[0].state.output);
+    expect(payload.messages).toEqual([{ id: 1, from: 'sender', content: 'hello while busy' }]);
+  });
+
   test('cleans dead process sessions on join so old peers do not linger after restart', async () => {
     const { hooks } = await init();
     await fs.writeFile(
@@ -411,7 +492,13 @@ describe('crosstalk plugin', () => {
     expect(usage.parts).toEqual([{ type: 'text', text: 'seed' }]);
     expect(prompts[0].body).toEqual({
       noReply: true,
-      parts: [{ type: 'text', text: 'Usage: /crosstalk join [name...] or /crosstalk drop', ignored: true }],
+      parts: [
+        {
+          type: 'text',
+          text: 'Usage: /crosstalk join [--room ROOM] [name...] | /crosstalk status | /crosstalk inbox | /crosstalk drop',
+          ignored: true,
+        },
+      ],
     });
 
     const join = { parts: [{ type: 'text', text: 'template text' }] };
@@ -419,7 +506,13 @@ describe('crosstalk plugin', () => {
     expect(join.parts).toEqual([{ type: 'text', text: 'template text' }]);
     expect(prompts[1].body).toEqual({
       noReply: true,
-      parts: [{ type: 'text', text: 'Joined crosstalk as local name.\n\nNo other joined sessions yet.', ignored: true }],
+      parts: [
+        {
+          type: 'text',
+          text: 'Joined crosstalk room default as local name.\n\nOpen messages: 0\n\nNo other joined sessions yet.',
+          ignored: true,
+        },
+      ],
     });
   });
 });

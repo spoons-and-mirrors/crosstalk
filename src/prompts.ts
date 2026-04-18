@@ -7,6 +7,7 @@ const DEFAULT_PROVIDER_ID = 'unknown';
 
 export const MAX_MESSAGE_LENGTH = 10000;
 export const MAX_STATUS_LENGTH = 300;
+export const DEFAULT_ROOM = 'default';
 
 export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 # Crosstalk
@@ -33,23 +34,53 @@ When you receive a direct message, answer with \`broadcast(reply_to=<id>, messag
 export const BROADCAST_DESCRIPTION =
   "Communicate with other joined crosstalk sessions. Omit send_to for a status update, use send_to for a direct message, or use reply_to to answer a received message.";
 
-export const JOIN_USAGE = "Usage: /crosstalk join [name...] or /crosstalk drop";
+export const JOIN_USAGE =
+  'Usage: /crosstalk join [--room ROOM] [name...] | /crosstalk status | /crosstalk inbox | /crosstalk drop';
 export const NOT_JOINED = "This session is not joined. Use /crosstalk join first.";
 export const SELF_MESSAGE = "Warning: You cannot send a message to yourself.";
 export const MISSING_MESSAGE = "Error: 'message' parameter is required.";
 export const UNKNOWN_REPLY = "Error: Unknown reply target.";
 
-export function joinResult(self: string, peers: SharedSession[]): string {
-  const lines = [`Joined crosstalk as ${self}.`];
-
+function peerLines(peers: SharedSession[]): string[] {
   if (peers.length === 0) {
-    lines.push('', 'No other joined sessions yet.');
+    return ['No other joined sessions yet.'];
+  }
+
+  const lines = ['Other joined sessions:'];
+  for (const peer of peers) {
+    const state = peer.status === 'idle' ? 'idle' : 'busy';
+    lines.push(`- ${peer.alias} (${state})`);
+    for (const status of peer.history) {
+      lines.push(`  -> ${status}`);
+    }
+  }
+
+  return lines;
+}
+
+export function joinResult(self: string, room: string, peers: SharedSession[], messages: SharedMessage[]): string {
+  const lines = [`Joined crosstalk room ${room} as ${self}.`, '', `Open messages: ${messages.length}`, ''];
+  lines.push(...peerLines(peers));
+  return lines.join('\n');
+}
+
+export function statusResult(self: string, room: string, peers: SharedSession[], messages: SharedMessage[]): string {
+  const lines = [`You are: ${self}`, `Room: ${room}`, `Open messages: ${messages.length}`, ''];
+  lines.push(...peerLines(peers));
+  return lines.join('\n');
+}
+
+export function inboxResult(self: string, room: string, messages: SharedMessage[]): string {
+  const lines = [`Broadcast inbox for ${self}`, `Room: ${room}`];
+
+  if (messages.length === 0) {
+    lines.push('', 'No unread messages.');
     return lines.join('\n');
   }
 
-  lines.push('', 'Other joined sessions:');
-  for (const peer of peers) {
-    lines.push(`- ${peer.alias}`);
+  lines.push('', 'Open messages:');
+  for (const message of messages) {
+    lines.push(`- #${message.msgIndex} from ${message.from}: "${message.body}"`);
   }
 
   return lines.join('\n');

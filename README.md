@@ -4,7 +4,9 @@
 
 ## Commands
 
-- `/crosstalk join [name...]`
+- `/crosstalk join [--room ROOM] [name...]`
+- `/crosstalk status`
+- `/crosstalk inbox`
 - `/crosstalk drop`
 
 ## Broadcast tool

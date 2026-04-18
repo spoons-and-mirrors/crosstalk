@@ -353,8 +353,8 @@ describe('crosstalk live smoke', () => {
       await join(client, sender.id, 'sender');
       await join(client, receiver.id, 'receiver');
 
-      await waitForText(client, sender.id, 'Joined crosstalk as sender');
-      await waitForText(client, receiver.id, 'Joined crosstalk as receiver');
+      await waitForText(client, sender.id, 'Joined crosstalk room default as sender');
+      await waitForText(client, receiver.id, 'Joined crosstalk room default as receiver');
 
       llm.queue.push({
         type: 'tool',
