@@ -1,0 +1,41 @@
+{
+  "name": "@spoons-and-mirrors/crosstalk",
+  "version": "0.1.0",
+  "description": "Cross-session broadcast messaging for OpenCode",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --external '@opencode-ai/plugin' --minify && tsc --emitDeclarationOnly",
+    "prepublishOnly": "bun run build",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "broadcast",
+    "messaging",
+    "session"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": "^1.0.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.0.143",
+    "@types/node": "^24.10.1",
+    "bun-types": "^1.3.5",
+    "typescript": "^5.9.3"
+  }
+}
