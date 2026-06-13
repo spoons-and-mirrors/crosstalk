@@ -59,7 +59,7 @@ function toolContext(sessionID: string) {
 
 function createClient() {
   const prompts: PromptRecord[] = [];
-  const created: Array<{ title?: string; agent?: string; model?: unknown }> = [];
+  const created: Array<{ body?: { title?: string; agent?: string; model?: unknown }; title?: string; agent?: string; model?: unknown }> = [];
   const history = new Map<string, ReturnType<typeof message>[]>();
   let nextSession = 1;
 
@@ -67,9 +67,9 @@ function createClient() {
     calls: prompts,
     created,
     history,
-    async create(this: { created: typeof created }, body: { title?: string; agent?: string; model?: unknown }) {
-      this.created.push(body);
-      return { data: { id: `buddy_${nextSession++}`, title: body.title } };
+    async create(this: { created: typeof created }, input: { body?: { title?: string; agent?: string; model?: unknown }; title?: string }) {
+      this.created.push(input);
+      return { data: { id: `buddy_${nextSession++}`, title: input.body?.title || input.title } };
     },
     async prompt(this: { calls: PromptRecord[] }, params: { path: { id: string }; body: PromptRecord['body'] }) {
       this.calls.push({ id: params.path.id, body: params.body });
@@ -190,9 +190,11 @@ describe('crosstalk plugin', () => {
     expect(result).toContain('buddy_1');
     expect(created).toEqual([
       {
-        title: 'crosstalk buddy for s1',
-        agent: 'build',
-        model: { providerID: 'anthropic', id: 'claude-sonnet', variant: undefined },
+        body: {
+          title: 'crosstalk buddy for s1',
+          agent: 'build',
+          model: { providerID: 'anthropic', id: 'claude-sonnet', variant: undefined },
+        },
       },
     ]);
     expect(prompts.some((prompt) => prompt.id === 'buddy_1' && prompt.body.parts[0].text?.includes('buddy session'))).toBe(true);
@@ -266,15 +268,39 @@ describe('crosstalk plugin', () => {
     expect(prompts.some((prompt) => prompt.body.parts[0].text?.includes('wake and help please'))).toBe(false);
   });
 
-  test('session deletion removes the pair and messages', async () => {
+  test('session deletion preserves history and blocks delivery to the deleted endpoint', async () => {
     const { hooks, history } = await init();
     history.set('s1', [message('s1', 'start')]);
 
     await hooks.tool!.crosstalk.execute({ action: 'send', message: 'temporary work' }, toolContext('s1'));
     await runDeleted(hooks, 'buddy_1');
 
-    const state = JSON.parse(await Bun.file(statePath()).text()) as { pairs: Record<string, unknown>; messages: unknown[] };
-    expect(Object.keys(state.pairs)).toHaveLength(0);
-    expect(state.messages).toHaveLength(0);
+    const state = JSON.parse(await Bun.file(statePath()).text()) as {
+      pairs: Record<string, { buddy: { deletedAt?: number } }>;
+      messages: Array<{ body: string }>;
+    };
+    expect(Object.keys(state.pairs)).toHaveLength(1);
+    expect(state.pairs.s1.buddy.deletedAt).toBeNumber();
+    expect(state.messages[0].body).toBe('temporary work');
+
+    const status = await hooks.tool!.crosstalk.execute({ action: 'status' }, toolContext('s1'));
+    expect(status).toContain('deleted at');
+
+    const send = await hooks.tool!.crosstalk.execute({ action: 'send', message: 'are you still there?' }, toolContext('s1'));
+    expect(send).toContain('buddy session was deleted');
+  });
+
+  test('corrupt persisted state is quarantined before creating fresh state', async () => {
+    const { hooks, history, dir } = await init();
+    history.set('s1', [message('s1', 'start')]);
+    await fs.writeFile(statePath(), '{not json');
+
+    await hooks.tool!.crosstalk.execute({ action: 'send', message: 'recover from bad state' }, toolContext('s1'));
+
+    const files = await fs.readdir(dir);
+    expect(files.some((file) => file.startsWith('state.corrupt.') && file.endsWith('.json'))).toBe(true);
+    const state = JSON.parse(await Bun.file(statePath()).text()) as { version: number; messages: Array<{ body: string }> };
+    expect(state.version).toBe(2);
+    expect(state.messages[0].body).toBe('recover from bad state');
   });
 });

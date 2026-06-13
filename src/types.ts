@@ -33,9 +33,13 @@ export interface CreateSessionBody {
   model?: { providerID?: string; id?: string; variant?: unknown };
 }
 
+export interface CreateSessionRequest {
+  body: CreateSessionBody;
+}
+
 export interface OpenCodeSessionClient {
   session: {
-    create?: (body: CreateSessionBody) => Promise<{ data?: { id?: string; title?: string } }>;
+    create?: (input: CreateSessionRequest) => Promise<{ data?: { id?: string; title?: string } }>;
     prompt: (params: { path: { id: string }; body: PromptBody }) => Promise<{ data?: unknown }>;
     promptAsync?: (params: { path: { id: string }; body: PromptBody }) => Promise<{ data?: unknown }>;
     messages: (params: { path: { id: string } }) => Promise<{ data?: SessionMessage[] }>;
@@ -137,6 +141,7 @@ export interface PairEndpoint {
   createdAt: number;
   updatedAt: number;
   heartbeatAt: number;
+  deletedAt?: number;
   agent?: string;
   model?: ModelRef;
 }

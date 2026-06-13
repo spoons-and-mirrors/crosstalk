@@ -52,6 +52,11 @@ function isNodeError(value: unknown): value is NodeJS.ErrnoException {
   return value instanceof Error;
 }
 
+async function quarantineStateFile(): Promise<void> {
+  const suffix = `${Date.now()}.${process.pid}`;
+  await fs.rename(stateFile(), path.join(stateDir(), `state.corrupt.${suffix}.json`)).catch(() => undefined);
+}
+
 function endpoint(sessionId: string, side: PairSide, createdAt: number, agent?: string, model?: ModelRef): PairEndpoint {
   return {
     sessionId,
@@ -123,6 +128,7 @@ async function readStateFile(): Promise<CrosstalkState> {
     const text = await fs.readFile(stateFile(), 'utf8');
     const parsed = JSON.parse(text) as CrosstalkState;
     if (parsed.version !== 2 || typeof parsed.pairs !== 'object' || !Array.isArray(parsed.messages)) {
+      await quarantineStateFile();
       return emptyState();
     }
     return parsed;
@@ -130,6 +136,7 @@ async function readStateFile(): Promise<CrosstalkState> {
     if (isNodeError(error) && error.code === 'ENOENT') {
       return emptyState();
     }
+    await quarantineStateFile();
     return emptyState();
   }
 }
@@ -220,11 +227,16 @@ export async function createPair(input: {
 export async function removeSession(sessionId: string): Promise<void> {
   await mutateState((state) => {
     const pair = pairFor(state, sessionId);
-    if (!pair) {
+    const side = pair ? sideFor(pair, sessionId) : undefined;
+    if (!pair || !side) {
       return;
     }
-    delete state.pairs[pair.id];
-    state.messages = state.messages.filter((message) => message.pairId !== pair.id);
+    const deletedAt = now();
+    pair[side].deletedAt = deletedAt;
+    pair[side].status = 'idle';
+    pair[side].ownerPid = undefined;
+    pair[side].updatedAt = deletedAt;
+    pair.updatedAt = deletedAt;
   });
 }
 
@@ -232,7 +244,7 @@ export async function addMessage(
   sessionId: string,
   body: string,
   replyTo?: string,
-): Promise<{ view: PairView; message?: CrosstalkMessage; error?: 'not-paired' | 'empty' | 'unknown-reply' }> {
+): Promise<{ view: PairView; message?: CrosstalkMessage; error?: 'not-paired' | 'empty' | 'unknown-reply' | 'target-deleted' }> {
   return mutateState((state) => {
     const pair = pairFor(state, sessionId);
     const selfSide = pair ? sideFor(pair, sessionId) : undefined;
@@ -258,6 +270,9 @@ export async function addMessage(
     const targetSide = otherSide(selfSide);
     const self = pair[selfSide];
     const target = pair[targetSide];
+    if (target.deletedAt) {
+      return { view: viewFor(state, sessionId), error: 'target-deleted' };
+    }
     const sequence = pair.nextMessage;
     const message: CrosstalkMessage = {
       id: `m${sequence}`,
@@ -308,7 +323,7 @@ export async function syncLocalSessions(local: Map<string, LocalSession>): Promi
     for (const [sessionId, localState] of local) {
       const pair = pairFor(state, sessionId);
       const side = pair ? sideFor(pair, sessionId) : undefined;
-      if (!pair || !side) {
+      if (!pair || !side || pair[side].deletedAt) {
         continue;
       }
       pair[side].ownerPid = process.pid;
@@ -325,7 +340,7 @@ export async function syncLocalSessions(local: Map<string, LocalSession>): Promi
 
       const pair = pairFor(state, sessionId);
       const side = pair ? sideFor(pair, sessionId) : undefined;
-      if (!pair || !side) {
+      if (!pair || !side || pair[side].deletedAt) {
         continue;
       }
 

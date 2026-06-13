@@ -4,11 +4,20 @@ import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin';
 import {
   CROSSTALK_DESCRIPTION,
+  CROSSTALK_COMMAND_DESCRIPTION,
   CROSSTALK_USAGE,
+  ACTION_ARG_DESCRIPTION,
+  INVALID_ACTION,
+  LIMIT_ARG_DESCRIPTION,
+  MESSAGE_ARG_DESCRIPTION,
   MISSING_MESSAGE,
+  NOT_PAIRED,
+  REPLY_TO_ARG_DESCRIPTION,
   SYSTEM_PROMPT,
+  TARGET_DELETED,
   UNKNOWN_REPLY,
   buddyBootstrapPrompt,
+  buddyTitle,
   commandStatus,
   createTimelineMessages,
   readResult,
@@ -112,15 +121,17 @@ async function ensurePair(client: OpenCodeSessionClient, sessionId: string) {
 
   const model = await readSessionModel(client, sessionId);
   const created = await client.session.create({
-    title: `crosstalk buddy for ${sessionId}`,
-    agent: model.agent,
-    model: model.model
-      ? {
-          providerID: model.model.providerID,
-          id: model.model.modelID,
-          variant: model.model.variant,
-        }
-      : undefined,
+    body: {
+      title: buddyTitle(sessionId),
+      agent: model.agent,
+      model: model.model
+        ? {
+            providerID: model.model.providerID,
+            id: model.model.modelID,
+            variant: typeof model.model.variant === 'string' ? model.model.variant : undefined,
+          }
+        : undefined,
+    },
   });
   const buddySessionId = created.data?.id;
   if (!buddySessionId) {
@@ -173,8 +184,8 @@ async function poll(): Promise<void> {
     }
 
     try {
-      await wakeSession(client, candidate.sessionId, candidate.fromSide);
       await markWake(candidate.sessionId, pending);
+      await wakeSession(client, candidate.sessionId, candidate.fromSide);
     } finally {
       for (const messageId of pending) {
         waking.delete(wakeKey(candidate.sessionId, messageId));
@@ -239,8 +250,9 @@ function insertTimeline(messages: UserMessage[], timeline: UserMessage[], lastUs
 
   for (const message of fresh) {
     const lastUserIndex = messages.findIndex((candidate) => candidate.info.id === lastUser.info.id);
-    const insertionLimit = lastUserIndex === -1 ? messages.length : lastUserIndex;
+    const lastUserCreated = lastUser.info.time?.created || 0;
     const created = message.info.time?.created || 0;
+    const insertionLimit = lastUserIndex === -1 || created > lastUserCreated ? messages.length : lastUserIndex;
     let index = messages.findIndex((candidate, candidateIndex) => {
       if (candidateIndex >= insertionLimit) {
         return false;
@@ -258,10 +270,10 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
   return tool({
     description: CROSSTALK_DESCRIPTION,
     args: {
-      action: tool.schema.string().describe('One of: send, read, reply, status'),
-      message: tool.schema.string().optional().describe('Message body for send or reply'),
-      reply_to: tool.schema.string().optional().describe('Message id to reply to, like m1'),
-      limit: tool.schema.number().optional().describe('Maximum messages to read, default 20'),
+      action: tool.schema.string().describe(ACTION_ARG_DESCRIPTION),
+      message: tool.schema.string().optional().describe(MESSAGE_ARG_DESCRIPTION),
+      reply_to: tool.schema.string().optional().describe(REPLY_TO_ARG_DESCRIPTION),
+      limit: tool.schema.number().optional().describe(LIMIT_ARG_DESCRIPTION),
     },
     async execute(args, context: ToolContext) {
       const action = (args.action || 'status').trim().toLowerCase();
@@ -276,7 +288,7 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
       }
 
       if (action !== 'send' && action !== 'reply') {
-        return 'Error: action must be one of send, read, reply, status.';
+        return INVALID_ACTION;
       }
 
       const body = typeof args.message === 'string' ? args.message : '';
@@ -292,8 +304,11 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
       if (sent.error === 'empty') {
         return MISSING_MESSAGE;
       }
+      if (sent.error === 'target-deleted') {
+        return TARGET_DELETED;
+      }
       if (sent.error === 'not-paired' || !sent.message) {
-        return 'Error: crosstalk buddy is not paired.';
+        return NOT_PAIRED;
       }
 
       const targetSessionId = sent.message.toSessionId;
@@ -319,7 +334,7 @@ const server: Plugin = async (ctx) => {
     config: async (input: ConfigTransformOutput) => {
       input.command ??= {};
       input.command.crosstalk = {
-        description: 'Show crosstalk buddy status',
+        description: CROSSTALK_COMMAND_DESCRIPTION,
         template: '$ARGUMENTS',
       };
 

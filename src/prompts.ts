@@ -21,12 +21,25 @@ Your buddy is another OpenCode session with the same agent and model. The buddy 
 
 export const CROSSTALK_DESCRIPTION =
   'Send messages to, read from, or reply to your paired crosstalk buddy session.';
+export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
+export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
+export const MESSAGE_ARG_DESCRIPTION = 'Message body for send or reply';
+export const REPLY_TO_ARG_DESCRIPTION = 'Message id to reply to, like m1';
+export const LIMIT_ARG_DESCRIPTION = 'Maximum messages to read, default 20';
 
 export const CROSSTALK_USAGE =
   'Usage: /crosstalk. The crosstalk tool is always available; a buddy session is created on first send or reply.';
+export const INVALID_ACTION = 'Error: action must be one of send, read, reply, status.';
 export const MISSING_MESSAGE = "Error: 'message' parameter is required for send or reply.";
 export const UNKNOWN_REPLY = 'Error: Unknown reply target. Use crosstalk read to see message IDs.';
+export const TARGET_DELETED =
+  'Error: crosstalk buddy session was deleted. Existing crosstalk history is still available with read/status, but new messages cannot be delivered to that session.';
+export const NOT_PAIRED = 'Error: crosstalk buddy is not paired.';
 export const NO_PAIR = 'No crosstalk buddy exists yet. Send a message with the crosstalk tool to create one.';
+
+export function buddyTitle(sessionId: string): string {
+  return `crosstalk buddy for ${sessionId}`;
+}
 
 export function normalizeMessage(text: string, max: number): string {
   const trimmed = text.trim();
@@ -40,6 +53,13 @@ function sideName(side: PairSide): string {
   return side === 'source' ? 'main session' : 'buddy session';
 }
 
+function endpointStatus(endpoint: PairView['self']): string {
+  if (!endpoint) {
+    return 'unknown';
+  }
+  return endpoint.deletedAt ? `deleted at ${new Date(endpoint.deletedAt).toISOString()}` : endpoint.status;
+}
+
 export function commandStatus(view: PairView): string {
   if (!view.pair || !view.self || !view.buddy || !view.selfSide) {
     return [NO_PAIR, '', 'The crosstalk tool is available in this session.'].join('\n');
@@ -48,7 +68,7 @@ export function commandStatus(view: PairView): string {
   return [
     `Crosstalk pair: ${view.pair.id}`,
     `You are: ${sideName(view.selfSide)} (${view.self.sessionId})`,
-    `Buddy: ${sideName(view.buddy.side)} (${view.buddy.sessionId}, ${view.buddy.status})`,
+    `Buddy: ${sideName(view.buddy.side)} (${view.buddy.sessionId}, ${endpointStatus(view.buddy)})`,
     `Unread messages: ${view.unread.length}`,
   ].join('\n');
 }
