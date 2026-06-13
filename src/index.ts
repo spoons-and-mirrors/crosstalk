@@ -1,38 +1,24 @@
-// This file exposes the crosstalk server plugin and wires command handling, prompt injection, broadcast, and wake-ups.
+// This file exposes the crosstalk server plugin and wires the paired buddy tool, timeline projection, and wake-ups.
 
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin';
 import {
-  BROADCAST_DESCRIPTION,
-  JOIN_USAGE,
+  CROSSTALK_DESCRIPTION,
+  CROSSTALK_USAGE,
   MISSING_MESSAGE,
-  NOT_JOINED,
-  SELF_MESSAGE,
   SYSTEM_PROMPT,
   UNKNOWN_REPLY,
-  broadcastResult,
-  createInboxMessage,
-  inboxResult,
-  joinResult,
-  normalizeMessage,
+  buddyBootstrapPrompt,
+  commandStatus,
+  createTimelineMessages,
+  readResult,
+  sendResult,
   statusResult,
-  unknownRecipient,
   wakePrompt,
 } from './prompts';
-import {
-  dropRoom,
-  getRoomView,
-  handleReply,
-  joinRoom,
-  markWake,
-  markPresented,
-  sendMessage,
-  syncLocalSessions,
-  updateStatus,
-} from './room';
+import { addMessage, createPair, getPairView, markWake, readMessages, removeSession, syncLocalSessions } from './room';
 import type {
   CommandInput,
-  CommandOutput,
   ConfigTransformOutput,
   MessagesTransformOutput,
   OpenCodeSessionClient,
@@ -43,14 +29,16 @@ import type {
   SystemTransformInput,
   SystemTransformOutput,
   ToolContext,
+  UserMessage,
 } from './types';
-import { getClient, getPoller, joined, setClient, setPoller, waking } from './memory';
+import { getClient, getPoller, localSessions, setClient, setPoller, waking } from './memory';
 
 const POLL_INTERVAL_MS = 1500;
 const COMMAND_HANDLED = '__CROSSTALK_COMMAND_HANDLED__';
+const DEFAULT_READ_LIMIT = 20;
 
-function wakeKey(sessionId: string, msgIndex: number): string {
-  return `${sessionId}:${msgIndex}`;
+function wakeKey(sessionId: string, messageId: string): string {
+  return `${sessionId}:${messageId}`;
 }
 
 function ensurePoller(client: OpenCodeSessionClient): void {
@@ -81,7 +69,8 @@ async function readSessionModel(client: OpenCodeSessionClient, sessionId: string
       model: message.info.model
         ? {
             providerID: message.info.model.providerID,
-            modelID: message.info.model.modelID,
+            modelID: message.info.model.modelID || message.info.model.id,
+            variant: message.info.variant || message.info.model.variant,
           }
         : undefined,
     };
@@ -89,114 +78,109 @@ async function readSessionModel(client: OpenCodeSessionClient, sessionId: string
   return {};
 }
 
-async function wakeSession(client: OpenCodeSessionClient, sessionId: string, from: string): Promise<void> {
-  const model = await readSessionModel(client, sessionId);
-  if (client.session.promptAsync) {
-    await client.session.promptAsync({
-      path: { id: sessionId },
-      body: {
-        parts: [{ type: 'text', text: wakePrompt(from) }],
-        agent: model.agent,
-        model: model.model,
-      },
-    });
-    return;
-  }
-
+async function promptNoReply(client: OpenCodeSessionClient, sessionId: string, text: string): Promise<void> {
   await client.session.prompt({
     path: { id: sessionId },
     body: {
-      parts: [{ type: 'text', text: wakePrompt(from) }],
-      agent: model.agent,
-      model: model.model,
+      noReply: true,
+      parts: [{ type: 'text', text }],
     },
   });
 }
 
+async function sendIgnoredMessage(client: OpenCodeSessionClient, sessionId: string, text: string): Promise<void> {
+  await client.session.prompt({
+    path: { id: sessionId },
+    body: {
+      noReply: true,
+      parts: [{ type: 'text', text, ignored: true }],
+    },
+  });
+}
+
+async function ensurePair(client: OpenCodeSessionClient, sessionId: string) {
+  const existing = await getPairView(sessionId);
+  if (existing.pair && existing.buddy) {
+    localSessions.set(existing.self?.sessionId || sessionId, { status: existing.self?.status || 'idle' });
+    localSessions.set(existing.buddy.sessionId, { status: existing.buddy.status });
+    return existing;
+  }
+
+  if (!client.session.create) {
+    throw new Error('This OpenCode client does not expose session.create, so crosstalk cannot create a buddy session.');
+  }
+
+  const model = await readSessionModel(client, sessionId);
+  const created = await client.session.create({
+    title: `crosstalk buddy for ${sessionId}`,
+    agent: model.agent,
+    model: model.model
+      ? {
+          providerID: model.model.providerID,
+          id: model.model.modelID,
+          variant: model.model.variant,
+        }
+      : undefined,
+  });
+  const buddySessionId = created.data?.id;
+  if (!buddySessionId) {
+    throw new Error('OpenCode did not return a buddy session id.');
+  }
+
+  const view = await createPair({
+    sourceSessionId: sessionId,
+    buddySessionId,
+    agent: model.agent,
+    model: model.model,
+  });
+  localSessions.set(sessionId, { status: view.self?.status || 'idle' });
+  localSessions.set(buddySessionId, { status: view.buddy?.status || 'idle' });
+  await promptNoReply(client, buddySessionId, buddyBootstrapPrompt());
+  return view;
+}
+
+async function wakeSession(client: OpenCodeSessionClient, sessionId: string, fromSide: 'source' | 'buddy'): Promise<void> {
+  const model = await readSessionModel(client, sessionId);
+  const body = {
+    parts: [{ type: 'text', text: wakePrompt(fromSide) }],
+    agent: model.agent,
+    model: model.model,
+  };
+
+  if (client.session.promptAsync) {
+    await client.session.promptAsync({ path: { id: sessionId }, body });
+    return;
+  }
+
+  await client.session.prompt({ path: { id: sessionId }, body });
+}
+
 async function poll(): Promise<void> {
   const client = getClient();
-  if (!client) {
+  if (!client || localSessions.size === 0) {
     return;
   }
 
-  if (joined.size === 0) {
-    return;
-  }
-
-  const wake = await syncLocalSessions(joined);
+  const wake = await syncLocalSessions(localSessions);
   for (const candidate of wake) {
-    const pending = candidate.msgIndices.filter((msgIndex) => !waking.has(wakeKey(candidate.sessionId, msgIndex)));
+    const pending = candidate.messageIds.filter((messageId) => !waking.has(wakeKey(candidate.sessionId, messageId)));
     if (pending.length === 0) {
       continue;
     }
 
-    for (const msgIndex of pending) {
-      waking.add(wakeKey(candidate.sessionId, msgIndex));
+    for (const messageId of pending) {
+      waking.add(wakeKey(candidate.sessionId, messageId));
     }
 
     try {
-      await wakeSession(client, candidate.sessionId, candidate.from);
+      await wakeSession(client, candidate.sessionId, candidate.fromSide);
       await markWake(candidate.sessionId, pending);
     } finally {
-      for (const msgIndex of pending) {
-        waking.delete(wakeKey(candidate.sessionId, msgIndex));
+      for (const messageId of pending) {
+        waking.delete(wakeKey(candidate.sessionId, messageId));
       }
     }
   }
-}
-
-function parseCommand(input: string):
-  | { action?: undefined }
-  | { action: 'drop' | 'status' | 'inbox' }
-  | { action: 'join'; name?: string; room?: string } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return {};
-  }
-
-  if (trimmed === 'status') {
-    return { action: 'status' };
-  }
-
-  if (trimmed === 'inbox') {
-    return { action: 'inbox' };
-  }
-
-  if (trimmed === 'drop') {
-    return { action: 'drop' };
-  }
-
-  if (!trimmed.startsWith('join')) {
-    return {};
-  }
-
-  const rest = trimmed.slice(4).trim();
-  if (!rest) {
-    return { action: 'join' };
-  }
-
-  const tokens = rest.split(/\s+/);
-  const parts: string[] = [];
-  let room: string | undefined;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token === '--room') {
-      room = tokens[index + 1];
-      index += 1;
-      continue;
-    }
-    if (token.startsWith('--room=')) {
-      room = token.slice(7);
-      continue;
-    }
-    parts.push(token);
-  }
-
-  return {
-    action: 'join',
-    room,
-    name: parts.length > 0 ? parts.join(' ') : undefined,
-  };
 }
 
 function statusEvent(event: PluginEvent): SessionStatusInput | undefined {
@@ -242,96 +226,83 @@ function deletedEvent(event: PluginEvent): SessionDeletedInput | undefined {
   return { sessionID };
 }
 
-async function sendIgnoredMessage(client: OpenCodeSessionClient, sessionId: string, text: string): Promise<void> {
-  await client.session.prompt({
-    path: { id: sessionId },
-    body: {
-      noReply: true,
-      parts: [{ type: 'text', text, ignored: true }],
-    },
-  });
-}
-
-function setJoined(sessionId: string, alias: string): void {
-  const current = joined.get(sessionId);
-  joined.set(sessionId, {
-    alias,
-    status: current?.status || 'idle',
-  });
-}
-
-async function wakeLocal(client: OpenCodeSessionClient, sessionId: string, msgIndex: number, from: string): Promise<void> {
-  const local = joined.get(sessionId);
-  if (!local || local.status !== 'idle') {
+function insertTimeline(messages: UserMessage[], timeline: UserMessage[], lastUser: UserMessage): void {
+  if (timeline.length === 0) {
     return;
   }
 
-  const key = wakeKey(sessionId, msgIndex);
-  if (waking.has(key)) {
+  const existing = new Set(messages.map((message) => message.info.id));
+  const fresh = timeline.filter((message) => !existing.has(message.info.id));
+  if (fresh.length === 0) {
     return;
   }
 
-  waking.add(key);
-  try {
-    await wakeSession(client, sessionId, from);
-    await markWake(sessionId, [msgIndex]);
-  } finally {
-    waking.delete(key);
+  for (const message of fresh) {
+    const lastUserIndex = messages.findIndex((candidate) => candidate.info.id === lastUser.info.id);
+    const insertionLimit = lastUserIndex === -1 ? messages.length : lastUserIndex;
+    const created = message.info.time?.created || 0;
+    let index = messages.findIndex((candidate, candidateIndex) => {
+      if (candidateIndex >= insertionLimit) {
+        return false;
+      }
+      return (candidate.info.time?.created || 0) > created;
+    });
+    if (index === -1) {
+      index = insertionLimit;
+    }
+    messages.splice(index, 0, message);
   }
 }
 
-function createBroadcastTool(client: OpenCodeSessionClient) {
+function createCrosstalkTool(client: OpenCodeSessionClient) {
   return tool({
-    description: BROADCAST_DESCRIPTION,
+    description: CROSSTALK_DESCRIPTION,
     args: {
-      send_to: tool.schema.string().optional().describe('Target session name. Omit to publish a status update.'),
-      message: tool.schema.string().describe('Message or status text'),
-      reply_to: tool.schema.number().optional().describe('Reply to an inbox message by numeric id'),
+      action: tool.schema.string().describe('One of: send, read, reply, status'),
+      message: tool.schema.string().optional().describe('Message body for send or reply'),
+      reply_to: tool.schema.string().optional().describe('Message id to reply to, like m1'),
+      limit: tool.schema.number().optional().describe('Maximum messages to read, default 20'),
     },
     async execute(args, context: ToolContext) {
-      const view = await getRoomView(context.sessionID);
-      if (!view.self) {
-        return NOT_JOINED;
+      const action = (args.action || 'status').trim().toLowerCase();
+
+      if (action === 'status') {
+        return statusResult(await getPairView(context.sessionID));
       }
 
-      const body = normalizeMessage(args.message || '', 10000);
-      if (!body) {
+      if (action === 'read') {
+        const limit = Math.max(1, Math.min(Number(args.limit) || DEFAULT_READ_LIMIT, 100));
+        return readResult(await readMessages(context.sessionID, limit), limit);
+      }
+
+      if (action !== 'send' && action !== 'reply') {
+        return 'Error: action must be one of send, read, reply, status.';
+      }
+
+      const body = typeof args.message === 'string' ? args.message : '';
+      if (!body.trim()) {
         return MISSING_MESSAGE;
       }
 
-      const handled = args.reply_to !== undefined ? await handleReply(context.sessionID, args.reply_to) : undefined;
-      if (args.reply_to !== undefined && !handled) {
+      const view = await ensurePair(client, context.sessionID);
+      const sent = await addMessage(context.sessionID, body, action === 'reply' ? args.reply_to : undefined);
+      if (sent.error === 'unknown-reply') {
         return UNKNOWN_REPLY;
       }
-
-      const autoRecipient = handled?.from;
-      const target = autoRecipient || args.send_to?.trim();
-
-      if (!target) {
-        const next = await updateStatus(context.sessionID, body);
-        return broadcastResult(next.self?.alias || view.self.alias, next.peers, [], handled);
+      if (sent.error === 'empty') {
+        return MISSING_MESSAGE;
+      }
+      if (sent.error === 'not-paired' || !sent.message) {
+        return 'Error: crosstalk buddy is not paired.';
       }
 
-      if (target.toLowerCase() === view.self.alias.toLowerCase()) {
-        return SELF_MESSAGE;
+      const targetSessionId = sent.message.toSessionId;
+      const local = localSessions.get(targetSessionId);
+      if (local?.status === 'idle') {
+        await poll();
       }
 
-      const sent = await sendMessage(context.sessionID, target, body);
-      if (sent.error === 'not-joined' || !sent.self) {
-        return NOT_JOINED;
-      }
-      if (sent.error === 'self') {
-        return SELF_MESSAGE;
-      }
-      if (sent.error === 'unknown-recipient') {
-        return unknownRecipient(target, sent.peers);
-      }
-
-      if (sent.targetSessionId && sent.msgIndex !== undefined && joined.has(sent.targetSessionId)) {
-        await wakeLocal(client, sent.targetSessionId, sent.msgIndex, sent.self.alias);
-      }
-
-      return broadcastResult(sent.self.alias, sent.peers, sent.sentTo ? [sent.sentTo] : [], handled);
+      return sendResult(sent.message.id, view.buddy?.sessionId || targetSessionId);
     },
   });
 }
@@ -342,91 +313,37 @@ const server: Plugin = async (ctx) => {
 
   return {
     tool: {
-      broadcast: createBroadcastTool(client),
+      crosstalk: createCrosstalkTool(client),
     },
 
     config: async (input: ConfigTransformOutput) => {
       input.command ??= {};
       input.command.crosstalk = {
-        description: 'Join or leave the crosstalk room',
+        description: 'Show crosstalk buddy status',
         template: '$ARGUMENTS',
       };
 
       const experimental = input.experimental || {};
       const tools = new Set(experimental.subagent_tools || []);
-      tools.add('broadcast');
+      tools.add('crosstalk');
       input.experimental = {
         ...experimental,
         subagent_tools: [...tools],
       };
     },
 
-    'command.execute.before': async (input: CommandInput, _output: CommandOutput) => {
+    'command.execute.before': async (input: CommandInput) => {
       if (input.command !== 'crosstalk') {
         return;
       }
 
-      const parsed = parseCommand(input.arguments);
-      if (parsed.action === 'join') {
-        const joinedRoom = await joinRoom(input.sessionID, parsed.name, parsed.room);
-        setJoined(input.sessionID, joinedRoom.alias);
-        await poll();
-        const view = await getRoomView(input.sessionID);
-        await sendIgnoredMessage(
-          client,
-          input.sessionID,
-          joinResult(joinedRoom.alias, view.room || joinedRoom.room, view.peers, view.messages),
-        );
-        throw new Error(COMMAND_HANDLED);
-      }
-
-      if (parsed.action === 'drop') {
-        joined.delete(input.sessionID);
-        await dropRoom(input.sessionID);
-        await sendIgnoredMessage(client, input.sessionID, 'Dropped from crosstalk.');
-        throw new Error(COMMAND_HANDLED);
-      }
-
-      if (parsed.action === 'status') {
-        const view = await getRoomView(input.sessionID);
-        if (!view.self || !view.room) {
-          await sendIgnoredMessage(client, input.sessionID, NOT_JOINED);
-          throw new Error(COMMAND_HANDLED);
-        }
-
-        await sendIgnoredMessage(client, input.sessionID, statusResult(view.self.alias, view.room, view.peers, view.messages));
-        throw new Error(COMMAND_HANDLED);
-      }
-
-      if (parsed.action === 'inbox') {
-        const view = await getRoomView(input.sessionID);
-        if (!view.self || !view.room) {
-          await sendIgnoredMessage(client, input.sessionID, NOT_JOINED);
-          throw new Error(COMMAND_HANDLED);
-        }
-
-        await markPresented(
-          input.sessionID,
-          view.messages.map((message) => message.msgIndex),
-        );
-        await sendIgnoredMessage(client, input.sessionID, inboxResult(view.self.alias, view.room, view.messages));
-        throw new Error(COMMAND_HANDLED);
-      }
-
-      await sendIgnoredMessage(client, input.sessionID, JOIN_USAGE);
+      const view = await getPairView(input.sessionID);
+      await sendIgnoredMessage(client, input.sessionID, input.arguments.trim() ? CROSSTALK_USAGE : commandStatus(view));
       throw new Error(COMMAND_HANDLED);
     },
 
-    'experimental.chat.system.transform': async (
-      input: SystemTransformInput,
-      output: SystemTransformOutput,
-    ) => {
+    'experimental.chat.system.transform': async (input: SystemTransformInput, output: SystemTransformOutput) => {
       if (!input.sessionID) {
-        return;
-      }
-
-      const view = await getRoomView(input.sessionID);
-      if (!view.self) {
         return;
       }
 
@@ -439,35 +356,27 @@ const server: Plugin = async (ctx) => {
         return;
       }
 
-      const view = await getRoomView(lastUser.info.sessionID);
-      if (!view.self) {
+      const view = await getPairView(lastUser.info.sessionID);
+      if (!view.pair) {
         return;
       }
 
-      output.messages.push(
-        createInboxMessage(lastUser.info.sessionID, view.self.alias, view.peers, view.messages, lastUser) as never,
-      );
-
-      if (view.messages.length === 0) {
-        return;
-      }
-
-      await markPresented(
-        lastUser.info.sessionID,
-        view.messages.map((message) => message.msgIndex),
+      insertTimeline(
+        output.messages,
+        createTimelineMessages(lastUser.info.sessionID, view.messages, lastUser),
+        lastUser,
       );
     },
 
     event: async ({ event }) => {
       const status = statusEvent(event as PluginEvent);
       if (status) {
-        const local = joined.get(status.sessionID);
+        const local = localSessions.get(status.sessionID);
         if (!local) {
           return;
         }
 
-        joined.set(status.sessionID, {
-          alias: local.alias,
+        localSessions.set(status.sessionID, {
           status: status.status.type === 'idle' ? 'idle' : 'busy',
         });
         await poll();
@@ -476,15 +385,12 @@ const server: Plugin = async (ctx) => {
 
       const idle = idleEvent(event as PluginEvent);
       if (idle) {
-        const local = joined.get(idle.sessionID);
+        const local = localSessions.get(idle.sessionID);
         if (!local) {
           return;
         }
 
-        joined.set(idle.sessionID, {
-          alias: local.alias,
-          status: 'idle',
-        });
+        localSessions.set(idle.sessionID, { status: 'idle' });
         await poll();
         return;
       }
@@ -494,12 +400,8 @@ const server: Plugin = async (ctx) => {
         return;
       }
 
-      if (!joined.has(deleted.sessionID)) {
-        return;
-      }
-
-      joined.delete(deleted.sessionID);
-      await dropRoom(deleted.sessionID);
+      localSessions.delete(deleted.sessionID);
+      await removeSession(deleted.sessionID);
     },
   };
 };

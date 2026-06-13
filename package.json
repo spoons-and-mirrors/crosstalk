@@ -1,7 +1,7 @@
 {
   "name": "@spoons-and-mirrors/crosstalk",
   "version": "0.1.0",
-  "description": "Cross-session broadcast messaging for OpenCode",
+  "description": "Paired buddy session messaging for OpenCode",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,7 +24,7 @@
   "keywords": [
     "opencode",
     "plugin",
-    "broadcast",
+    "delegation",
     "messaging",
     "session"
   ],

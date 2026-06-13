@@ -1,8 +1,8 @@
-// This file owns the in-memory process state for joined local sessions and wake polling.
+// This file owns the in-memory process state for local paired sessions and wake polling.
 
 import type { LocalSession, OpenCodeSessionClient } from './types';
 
-export const joined = new Map<string, LocalSession>();
+export const localSessions = new Map<string, LocalSession>();
 export const waking = new Set<string>();
 
 let poller: ReturnType<typeof setInterval> | undefined;
@@ -25,7 +25,7 @@ export function setClient(value: OpenCodeSessionClient | undefined): void {
 }
 
 export function resetForTests(): void {
-  joined.clear();
+  localSessions.clear();
   waking.clear();
   client = undefined;
 

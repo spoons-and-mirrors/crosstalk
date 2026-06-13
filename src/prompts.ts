@@ -1,90 +1,32 @@
-// This file owns the user-visible strings and synthetic prompt content for crosstalk.
+// This file owns user-visible strings and model-visible crosstalk timeline text.
 
-import type { HandledMessage, SharedMessage, SharedSession, UserMessage } from './types';
-
-const DEFAULT_MODEL_ID = 'unknown';
-const DEFAULT_PROVIDER_ID = 'unknown';
+import type { CrosstalkMessage, PairSide, PairView, UserMessage } from './types';
 
 export const MAX_MESSAGE_LENGTH = 10000;
 export const MAX_STATUS_LENGTH = 300;
-export const DEFAULT_ROOM = 'default';
 
 export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 # Crosstalk
 
-You are joined to a shared crosstalk room.
+You have a parallel coworker session available through the crosstalk tool.
 
-Use \`broadcast\` to communicate with other joined sessions:
-- \`broadcast(message="...")\` updates your visible status
-- \`broadcast(send_to="name", message="...")\` sends a direct message
-- \`broadcast(reply_to=1, message="...")\` replies to a received message and automatically targets the sender
+Use crosstalk when a task can benefit from delegation, a second opinion, or parallel research:
+- crosstalk({"action":"send","message":"..."}) sends a full message to your buddy.
+- crosstalk({"action":"read"}) reads full messages your buddy sent to you.
+- crosstalk({"action":"reply","reply_to":"m1","message":"..."}) replies to a specific message.
+- crosstalk({"action":"status"}) checks whether a buddy exists and how many unread messages are waiting.
 
-Messages arrive as a synthetic \`broadcast\` tool result with this shape:
-\`\`\`
-{
-  "you_are": "your registered name",
-  "sessions": [{ "name": "other", "status": ["..."], "idle": true }],
-  "messages": [{ "id": 1, "from": "other", "content": "..." }]
-}
-\`\`\`
-
-When you receive a direct message, answer with \`broadcast(reply_to=<id>, message="...")\` or send a new direct message with \`send_to\`.
+Your buddy is another OpenCode session with the same agent and model. The buddy is created automatically the first time you send or reply. If you are notified that crosstalk has unread messages, call crosstalk({"action":"read"}) before continuing.
 </instructions>`;
 
-export const BROADCAST_DESCRIPTION =
-  "Communicate with other joined crosstalk sessions. Omit send_to for a status update, use send_to for a direct message, or use reply_to to answer a received message.";
+export const CROSSTALK_DESCRIPTION =
+  'Send messages to, read from, or reply to your paired crosstalk buddy session.';
 
-export const JOIN_USAGE =
-  'Usage: /crosstalk join [--room ROOM] [name...] | /crosstalk status | /crosstalk inbox | /crosstalk drop';
-export const NOT_JOINED = "This session is not joined. Use /crosstalk join first.";
-export const SELF_MESSAGE = "Warning: You cannot send a message to yourself.";
-export const MISSING_MESSAGE = "Error: 'message' parameter is required.";
-export const UNKNOWN_REPLY = "Error: Unknown reply target.";
-
-function peerLines(peers: SharedSession[]): string[] {
-  if (peers.length === 0) {
-    return ['No other joined sessions yet.'];
-  }
-
-  const lines = ['Other joined sessions:'];
-  for (const peer of peers) {
-    const state = peer.status === 'idle' ? 'idle' : 'busy';
-    lines.push(`- ${peer.alias} (${state})`);
-    for (const status of peer.history) {
-      lines.push(`  -> ${status}`);
-    }
-  }
-
-  return lines;
-}
-
-export function joinResult(self: string, room: string, peers: SharedSession[], messages: SharedMessage[]): string {
-  const lines = [`Joined crosstalk room ${room} as ${self}.`, '', `Open messages: ${messages.length}`, ''];
-  lines.push(...peerLines(peers));
-  return lines.join('\n');
-}
-
-export function statusResult(self: string, room: string, peers: SharedSession[], messages: SharedMessage[]): string {
-  const lines = [`You are: ${self}`, `Room: ${room}`, `Open messages: ${messages.length}`, ''];
-  lines.push(...peerLines(peers));
-  return lines.join('\n');
-}
-
-export function inboxResult(self: string, room: string, messages: SharedMessage[]): string {
-  const lines = [`Broadcast inbox for ${self}`, `Room: ${room}`];
-
-  if (messages.length === 0) {
-    lines.push('', 'No unread messages.');
-    return lines.join('\n');
-  }
-
-  lines.push('', 'Open messages:');
-  for (const message of messages) {
-    lines.push(`- #${message.msgIndex} from ${message.from}: "${message.body}"`);
-  }
-
-  return lines.join('\n');
-}
+export const CROSSTALK_USAGE =
+  'Usage: /crosstalk. The crosstalk tool is always available; a buddy session is created on first send or reply.';
+export const MISSING_MESSAGE = "Error: 'message' parameter is required for send or reply.";
+export const UNKNOWN_REPLY = 'Error: Unknown reply target. Use crosstalk read to see message IDs.';
+export const NO_PAIR = 'No crosstalk buddy exists yet. Send a message with the crosstalk tool to create one.';
 
 export function normalizeMessage(text: string, max: number): string {
   const trimmed = text.trim();
@@ -94,129 +36,91 @@ export function normalizeMessage(text: string, max: number): string {
   return `${trimmed.slice(0, max)}... [truncated]`;
 }
 
-export function unknownRecipient(name: string, peers: SharedSession[]): string {
-  if (peers.length === 0) {
-    return `Error: Unknown recipient \"${name}\". No other joined sessions are available.`;
-  }
-
-  return `Error: Unknown recipient \"${name}\". Known sessions: ${peers.map((peer) => peer.alias).join(', ')}`;
+function sideName(side: PairSide): string {
+  return side === 'source' ? 'main session' : 'buddy session';
 }
 
-export function broadcastResult(
-  self: string,
-  peers: SharedSession[],
-  recipients: string[],
-  handled?: HandledMessage,
-): string {
-  const lines = [`You are: ${self}`];
-
-  if (peers.length === 0) {
-    lines.push('', 'No other joined sessions available.');
+export function commandStatus(view: PairView): string {
+  if (!view.pair || !view.self || !view.buddy || !view.selfSide) {
+    return [NO_PAIR, '', 'The crosstalk tool is available in this session.'].join('\n');
   }
 
-  if (peers.length > 0) {
-    lines.push('', 'Available sessions:');
-    for (const peer of peers) {
-      const state = peer.status === 'idle' ? 'idle' : 'busy';
-      lines.push(`- ${peer.alias} (${state})`);
-      for (const status of peer.history) {
-        lines.push(`  -> ${status}`);
-      }
-    }
+  return [
+    `Crosstalk pair: ${view.pair.id}`,
+    `You are: ${sideName(view.selfSide)} (${view.self.sessionId})`,
+    `Buddy: ${sideName(view.buddy.side)} (${view.buddy.sessionId}, ${view.buddy.status})`,
+    `Unread messages: ${view.unread.length}`,
+  ].join('\n');
+}
+
+export function statusResult(view: PairView): string {
+  return commandStatus(view);
+}
+
+export function sendResult(messageId: string, buddySessionId: string): string {
+  return [`Sent crosstalk message ${messageId}.`, `Buddy session: ${buddySessionId}`].join('\n');
+}
+
+export function readResult(view: PairView, limit: number): string {
+  if (!view.pair || !view.self) {
+    return NO_PAIR;
   }
 
-  if (handled) {
-    lines.push('', `Replied to #${handled.id} from ${handled.from}:`, `"${handled.body}"`);
-    if (recipients.length > 0) {
-      lines.push('', `Message sent to: ${recipients.join(', ')}`);
-    }
-    return lines.join('\n');
+  const visible = view.messages.filter((message) => message.toSessionId === view.self?.sessionId).slice(-limit);
+  if (visible.length === 0) {
+    return 'No crosstalk messages yet.';
   }
 
-  if (recipients.length > 0) {
-    lines.push('', `Message sent to: ${recipients.join(', ')}`);
-    return lines.join('\n');
+  const lines = ['Crosstalk messages:'];
+  for (const message of visible) {
+    const label = message.replyTo ? ` reply to ${message.replyTo}` : '';
+    lines.push(`- ${message.id} from ${sideName(message.fromSide)}${label}:`);
+    lines.push(message.body);
   }
-
-  lines.push('', 'Status updated.');
   return lines.join('\n');
 }
 
-export function wakePrompt(sender: string): string {
-  return `[Crosstalk] New message from ${sender}. Check your broadcast inbox and reply there.`;
+export function wakePrompt(sender: PairSide): string {
+  return `[Crosstalk] New message from your ${sideName(sender)}. Please call crosstalk({"action":"read"}) to read and respond.`;
 }
 
-export function createInboxMessage(
-  sessionId: string,
-  alias: string,
-  peers: SharedSession[],
-  messages: SharedMessage[],
-  lastUser: UserMessage,
-): Record<string, unknown> {
-  const now = Date.now();
-  const info = lastUser.info;
-  const output = JSON.stringify({
-    you_are: alias,
-    sessions: peers.map((peer) => ({
-      name: peer.alias,
-      status: peer.history.length > 0 ? peer.history : undefined,
-      idle: peer.status === 'idle' || undefined,
-    })),
-    messages: messages.map((message) => ({
-      id: message.msgIndex,
-      from: message.from,
-      content: message.body,
-    })),
-  });
+export function buddyBootstrapPrompt(): string {
+  return [
+    '[Crosstalk] You are the buddy session in a paired crosstalk workflow.',
+    'A coworker session may delegate work, ask questions, or request review through the crosstalk tool.',
+    'When prompted about new crosstalk messages, call crosstalk({"action":"read"}) to read the full message body and reply if useful.',
+  ].join('\n');
+}
 
-  const messageId = `msg_crosstalk_${now}`;
-  const partId = `part_crosstalk_${now}`;
-  const callId = `call_crosstalk_${now}`;
-  const title = messages.length > 0 ? `${messages.length} message(s)` : 'Crosstalk inbox';
-  const assistant: Record<string, unknown> = {
-    info: {
-      id: messageId,
-      sessionID: sessionId,
-      role: 'assistant',
-      agent: info.agent || 'code',
-      parentID: info.id,
-      modelID: info.model?.modelID || DEFAULT_MODEL_ID,
-      providerID: info.model?.providerID || DEFAULT_PROVIDER_ID,
-      mode: 'default',
-      path: { cwd: '/', root: '/' },
-      time: { created: now, completed: now },
-      cost: 0,
-      tokens: {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      },
-      ...(info.variant !== undefined ? { variant: info.variant } : {}),
-    },
-    parts: [
-      {
-        id: partId,
+export function createTimelineMessages(sessionId: string, messages: CrosstalkMessage[], lastUser: UserMessage): UserMessage[] {
+  const visible = messages.filter((message) => message.fromSessionId === sessionId || message.toSessionId === sessionId);
+  return visible.map((message) => {
+    const inbound = message.toSessionId === sessionId;
+    const label = inbound ? 'Buddy sent a crosstalk message' : 'You sent a crosstalk message to your buddy';
+    const reply = message.replyTo ? ` in reply to ${message.replyTo}` : '';
+    const text = inbound
+      ? `${label} (${message.id}${reply}). Use crosstalk({"action":"read"}) to read the full message body if needed.`
+      : `${label} (${message.id}${reply}).`;
+    const messageID = `msg_crosstalk_${message.pairId}_${message.sequence}_${sessionId}`;
+
+    return {
+      info: {
+        ...lastUser.info,
+        id: messageID,
         sessionID: sessionId,
-        messageID: messageId,
-        type: 'tool',
-        callID: callId,
-        tool: 'broadcast',
-        state: {
-          status: 'completed',
-          input: { synthetic: true },
-          output,
-          title,
-          metadata: {
-            incoming_message: messages.length > 0,
-            message_count: messages.length,
-            session_count: peers.length,
-          },
-          time: { start: now, end: now },
-        },
+        role: 'user',
+        time: { created: message.createdAt, completed: message.createdAt },
       },
-    ],
-  };
-
-  return assistant;
+      parts: [
+        {
+          id: `part_crosstalk_${message.pairId}_${message.sequence}_${sessionId}`,
+          sessionID: sessionId,
+          messageID,
+          type: 'text',
+          synthetic: true,
+          text: `<crosstalk>${text}</crosstalk>`,
+        },
+      ],
+    };
+  });
 }

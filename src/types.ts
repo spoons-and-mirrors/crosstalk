@@ -1,8 +1,9 @@
-// This file defines the small set of SDK, hook, and room types the plugin uses.
+// This file defines the small set of SDK, hook, and crosstalk state types the plugin uses.
 
 export interface ModelRef {
   providerID?: string;
   modelID?: string;
+  id?: string;
   variant?: unknown;
 }
 
@@ -14,19 +15,27 @@ export interface SessionMessage {
     agent?: string;
     model?: ModelRef;
     variant?: unknown;
+    time?: { created?: number; completed?: number };
   };
-  parts?: unknown[];
+  parts?: Part[];
 }
 
 export interface PromptBody {
   noReply?: boolean;
-  parts: Array<{ type: string; text?: string; ignored?: boolean }>;
+  parts: Array<{ type: string; text?: string; ignored?: boolean; synthetic?: boolean }>;
   agent?: string;
   model?: { providerID?: string; modelID?: string };
 }
 
+export interface CreateSessionBody {
+  title?: string;
+  agent?: string;
+  model?: { providerID?: string; id?: string; variant?: unknown };
+}
+
 export interface OpenCodeSessionClient {
   session: {
+    create?: (body: CreateSessionBody) => Promise<{ data?: { id?: string; title?: string } }>;
     prompt: (params: { path: { id: string }; body: PromptBody }) => Promise<{ data?: unknown }>;
     promptAsync?: (params: { path: { id: string }; body: PromptBody }) => Promise<{ data?: unknown }>;
     messages: (params: { path: { id: string } }) => Promise<{ data?: SessionMessage[] }>;
@@ -40,6 +49,8 @@ export interface ToolContext {
 export interface Part {
   type: string;
   text?: string;
+  ignored?: boolean;
+  synthetic?: boolean;
   [key: string]: unknown;
 }
 
@@ -78,8 +89,10 @@ export interface UserMessage {
     agent?: string;
     model?: ModelRef;
     variant?: unknown;
+    time?: { created?: number; completed?: number };
+    [key: string]: unknown;
   };
-  parts: unknown[];
+  parts: Part[];
 }
 
 export interface MessagesTransformOutput {
@@ -114,58 +127,66 @@ export interface PluginEvent {
   properties: unknown;
 }
 
-export interface SharedSession {
+export type PairSide = 'source' | 'buddy';
+
+export interface PairEndpoint {
   sessionId: string;
-  alias: string;
-  room: string;
+  side: PairSide;
   ownerPid?: number;
-  joinedAt: number;
+  status: 'idle' | 'busy';
+  createdAt: number;
   updatedAt: number;
   heartbeatAt: number;
-  status: 'idle' | 'busy';
-  history: string[];
-  nextMessage: number;
+  agent?: string;
+  model?: ModelRef;
 }
 
-export interface SharedMessage {
+export interface CrosstalkMessage {
   id: string;
-  msgIndex: number;
+  sequence: number;
+  pairId: string;
+  fromSide: PairSide;
+  toSide: PairSide;
   fromSessionId: string;
-  from: string;
   toSessionId: string;
   body: string;
   createdAt: number;
+  replyTo?: string;
   wakeAt?: number;
-  handledAt?: number;
-  presentedAt?: number;
+  readAt?: number;
 }
 
-export interface SharedRoom {
-  version: 1;
-  sessions: Record<string, SharedSession>;
-  messages: SharedMessage[];
+export interface CrosstalkPair {
+  id: string;
+  source: PairEndpoint;
+  buddy: PairEndpoint;
+  createdAt: number;
+  updatedAt: number;
+  nextMessage: number;
 }
 
-export interface RoomView {
-  self?: SharedSession;
-  room?: string;
-  peers: SharedSession[];
-  messages: SharedMessage[];
+export interface CrosstalkState {
+  version: 2;
+  pairs: Record<string, CrosstalkPair>;
+  messages: CrosstalkMessage[];
 }
 
-export interface HandledMessage {
-  id: number;
-  from: string;
-  body: string;
+export interface PairView {
+  pair?: CrosstalkPair;
+  selfSide?: PairSide;
+  self?: PairEndpoint;
+  buddy?: PairEndpoint;
+  unread: CrosstalkMessage[];
+  messages: CrosstalkMessage[];
 }
 
 export interface LocalSession {
-  alias: string;
   status: 'idle' | 'busy';
 }
 
 export interface WakeCandidate {
   sessionId: string;
-  from: string;
-  msgIndices: number[];
+  pairId: string;
+  messageIds: string[];
+  fromSide: PairSide;
 }
