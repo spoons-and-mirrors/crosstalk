@@ -324,6 +324,11 @@ describe('crosstalk plugin', () => {
     expect(afk?.parts[0].text).toContain('has been idle for 10 main-session turns');
     expect(afk?.parts[0].text).toContain('give the buddy a clear next task');
     expect(afk?.parts[0].text).toContain('Do not poll or sleep');
+
+    const laterOutput: MessagesTransformOutput = { messages: [message('s1', 'main turn 11')] };
+    await runMessages(hooks, laterOutput);
+
+    expect(laterOutput.messages.some((item) => item.parts[0].text?.includes('Buddy appears AFK'))).toBe(false);
   });
 
   test('adds crosstalk system prompt to normal session requests', async () => {

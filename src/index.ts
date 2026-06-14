@@ -288,7 +288,7 @@ function maybeCreateBuddyAfkMessage(sessionId: string, view: Awaited<ReturnType<
 
   const idleFetches = (buddyIdleFetches.get(view.pair.id) || 0) + 1;
   buddyIdleFetches.set(view.pair.id, idleFetches);
-  if (idleFetches < BUDDY_AFK_FETCH_THRESHOLD) {
+  if (idleFetches !== BUDDY_AFK_FETCH_THRESHOLD) {
     return undefined;
   }
 
