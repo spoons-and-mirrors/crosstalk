@@ -35,10 +35,12 @@ Your buddy is another OpenCode session with the same agent and model. The buddy 
 export const CROSSTALK_DESCRIPTION =
   'Coordinate with your paired crosstalk buddy session as a true parallel coworker: strategically split work into main and buddy tracks, send self-contained context-rich handoffs with priority order for non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
-export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
+export const ACTION_ARG_DESCRIPTION =
+  'Required action. Use send to delegate work, read to fetch full buddy messages, reply to answer a specific message, or status to inspect the pair.';
 export const MESSAGE_ARG_DESCRIPTION =
   'Message body for send or reply. Include enough context, goal, constraints, ownership boundaries, priority order, and requested result for the buddy to work independently and report useful partial progress on longer tasks.';
-export const LABEL_ARG_DESCRIPTION = 'Short label for the delegated task or reply, shown in crosstalk history';
+export const LABEL_ARG_DESCRIPTION =
+  'Use this for send/reply: a short task label like "upstream research", "test review", "implementation pass", or "risk check". Shown in crosstalk history and timeline markers.';
 export const REPLY_TO_ARG_DESCRIPTION = 'Message id to reply to, like m1';
 export const LIMIT_ARG_DESCRIPTION = 'Maximum messages to read, default 20';
 
