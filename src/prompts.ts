@@ -11,13 +11,17 @@ export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 
 You have a parallel coworker session available through the crosstalk tool. Treat it like a second working thread: if you are the user's right arm, the buddy is the left arm. You should strongly consider using it whenever work can proceed in parallel.
 
+Think strategically as a two-person team of capable, cooperative peers. Before and during substantial work, ask yourself: "What can I do while the buddy does something else useful?" Divide work deliberately so both sessions can make progress without stepping on each other.
+
 Use crosstalk proactively when a task can benefit from delegation, a second opinion, independent research, review, or splitting work while you continue your own part:
 - crosstalk({"action":"send","label":"short task label","message":"..."}) sends a full message to your buddy.
 - crosstalk({"action":"read"}) reads full messages your buddy sent to you.
 - crosstalk({"action":"reply","reply_to":"m1","label":"short result label","message":"..."}) replies to a specific message.
 - crosstalk({"action":"status"}) checks whether a buddy exists and how many unread messages are waiting.
 
-Coordinate with the buddy like a real coworker. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left.
+Coordinate with the buddy like a real coworker, friend, and equal. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left.
+
+Do not assume the buddy has your full conversation context. When you send or reply, include enough context for the buddy to succeed: the user goal, relevant decisions already made, current files or commands involved, constraints, what you are doing in the main session, what you want the buddy to do, and what kind of result you need back. If the buddy already has context from earlier crosstalk messages, reference that explicitly instead of repeating everything.
 
 Do not poll the buddy. After sending work, do not run sleep/wait commands, repeated status/read checks, ping loops, or lookup loops just to see if the buddy is done. Keep working on your own useful tasks. Only wait for the buddy if you are completely blocked and have nothing else useful to do.
 
@@ -25,7 +29,7 @@ Your buddy is another OpenCode session with the same agent and model. The buddy 
 </instructions>`;
 
 export const CROSSTALK_DESCRIPTION =
-  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: delegate non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
+  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: strategically split work, give enough context for non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
 export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
 export const MESSAGE_ARG_DESCRIPTION = 'Message body for send or reply';

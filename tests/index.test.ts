@@ -265,7 +265,12 @@ describe('crosstalk plugin', () => {
 
     expect(system[0]).toContain('parallel coworker session');
     expect(system[0]).toContain('second working thread');
+    expect(system[0]).toContain('What can I do while the buddy does something else useful?');
+    expect(system[0]).toContain('two-person team');
     expect(system[0]).toContain('non-conflicting sub-tasks');
+    expect(system[0]).toContain('Do not assume the buddy has your full conversation context');
+    expect(system[0]).toContain('include enough context');
+    expect(system[0]).toContain('what you are doing in the main session');
     expect(system[0]).toContain('Do not poll the buddy');
     expect(system[0]).toContain('sleep/wait commands');
     expect(system[0]).toContain('nothing else useful to do');
