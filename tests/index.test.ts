@@ -276,7 +276,10 @@ describe('crosstalk plugin', () => {
     expect(system[0]).toContain('include enough context');
     expect(system[0]).toContain('what you are doing in the main session');
     expect(system[0]).toContain('what not to touch');
+    expect(system[0]).toContain('priority order of the information you need');
     expect(system[0]).toContain('Avoid vague messages');
+    expect(system[0]).toContain('should not work for a long time without updating the main session');
+    expect(system[0]).toContain('early useful partial result');
     expect(system[0]).toContain('Do not poll the buddy');
     expect(system[0]).toContain('sleep/wait commands');
     expect(system[0]).toContain('nothing else useful to do');

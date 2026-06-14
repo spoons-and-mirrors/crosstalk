@@ -23,7 +23,9 @@ Use crosstalk proactively when a task can benefit from delegation, a second opin
 
 Coordinate with the buddy like a real coworker, friend, and equal. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left. The main session remains responsible for final task completion and should integrate the buddy's work instead of assuming the buddy handled everything.
 
-Do not assume the buddy has your full conversation context. A good crosstalk send is a self-contained handoff unless the buddy already knows the context from earlier crosstalk; include enough context: the user goal, relevant decisions already made, current files or commands involved, constraints, what you are doing in the main session, what you want the buddy to do, what not to touch, and what kind of result you need back. Avoid vague messages like "look at this" or "handle it" unless the shared context is already explicit. If the buddy already has context, reference the earlier message or thread and only add the new delta.
+Do not assume the buddy has your full conversation context. A good crosstalk send is a self-contained handoff unless the buddy already knows the context from earlier crosstalk; include enough context: the user goal, relevant decisions already made, current files or commands involved, constraints, what you are doing in the main session, what you want the buddy to do, what not to touch, and what kind of result you need back. When useful, specify the priority order of the information you need so the buddy can return the most important findings first. Avoid vague messages like "look at this" or "handle it" unless the shared context is already explicit. If the buddy already has context, reference the earlier message or thread and only add the new delta.
+
+The buddy should not work for a long time without updating the main session. For larger or uncertain tasks, the buddy should reply with an early useful partial result, status update, blocker, or top-priority finding, then continue or ask for follow-up as appropriate.
 
 Do not poll the buddy. After sending work, do not run sleep/wait commands, repeated status/read checks, ping loops, or lookup loops just to see if the buddy is done. Keep working on your own useful tasks. Only wait for the buddy if you are completely blocked and have nothing else useful to do.
 
@@ -31,11 +33,11 @@ Your buddy is another OpenCode session with the same agent and model. The buddy 
 </instructions>`;
 
 export const CROSSTALK_DESCRIPTION =
-  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: strategically split work into main and buddy tracks, send self-contained context-rich handoffs for non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
+  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: strategically split work into main and buddy tracks, send self-contained context-rich handoffs with priority order for non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
 export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
 export const MESSAGE_ARG_DESCRIPTION =
-  'Message body for send or reply. Include enough context, goal, constraints, ownership boundaries, and requested result for the buddy to work independently.';
+  'Message body for send or reply. Include enough context, goal, constraints, ownership boundaries, priority order, and requested result for the buddy to work independently and report useful partial progress on longer tasks.';
 export const LABEL_ARG_DESCRIPTION = 'Short label for the delegated task or reply, shown in crosstalk history';
 export const REPLY_TO_ARG_DESCRIPTION = 'Message id to reply to, like m1';
 export const LIMIT_ARG_DESCRIPTION = 'Maximum messages to read, default 20';
@@ -134,6 +136,7 @@ export function buddyBootstrapPrompt(): string {
     '[Crosstalk] You are the buddy session in a paired crosstalk workflow.',
     'Treat the main session as your parallel coworker, friend, and equal. It may delegate research, implementation, review, or follow-up work while it continues its own track.',
     'When prompted about new crosstalk messages, call crosstalk({"action":"read"}) to read the full message body, do the requested non-conflicting work, and reply with concise findings or results.',
+    'Do not work for too long without updating the main session. For larger tasks, send the highest-priority useful findings, partial results, status, or blockers early instead of waiting for perfect completion.',
     'If the request lacks context you need, say exactly what is missing instead of guessing, then do any safe partial work you can.',
   ].join('\n');
 }
