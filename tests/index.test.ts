@@ -266,6 +266,9 @@ describe('crosstalk plugin', () => {
     expect(system[0]).toContain('parallel coworker session');
     expect(system[0]).toContain('second working thread');
     expect(system[0]).toContain('non-conflicting sub-tasks');
+    expect(system[0]).toContain('Do not poll the buddy');
+    expect(system[0]).toContain('sleep/wait commands');
+    expect(system[0]).toContain('nothing else useful to do');
     expect(system[0]).toContain('crosstalk({"action":"read"})');
   });
 

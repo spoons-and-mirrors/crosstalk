@@ -19,11 +19,13 @@ Use crosstalk proactively when a task can benefit from delegation, a second opin
 
 Coordinate with the buddy like a real coworker. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left.
 
+Do not poll the buddy. After sending work, do not run sleep/wait commands, repeated status/read checks, ping loops, or lookup loops just to see if the buddy is done. Keep working on your own useful tasks. Only wait for the buddy if you are completely blocked and have nothing else useful to do.
+
 Your buddy is another OpenCode session with the same agent and model. The buddy is created automatically the first time you send or reply. If you are notified that crosstalk has unread messages, call crosstalk({"action":"read"}) before continuing.
 </instructions>`;
 
 export const CROSSTALK_DESCRIPTION =
-  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: delegate non-conflicting sub-tasks, read full replies, and keep both sessions working hand in hand.';
+  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: delegate non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
 export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
 export const MESSAGE_ARG_DESCRIPTION = 'Message body for send or reply';
