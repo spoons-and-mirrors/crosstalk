@@ -13,7 +13,7 @@ import type {
   PairView,
   WakeCandidate,
 } from './types';
-import { MAX_MESSAGE_LENGTH, crosstalkMessageLabel, normalizeLabel, normalizeMessage } from './prompts';
+import { MAX_MESSAGE_LENGTH, MAX_STATUS_LENGTH, crosstalkMessageLabel, normalizeLabel, normalizeMessage } from './prompts';
 
 const LOCK_STALE_MS = 10000;
 const LOCK_RETRY_MS = 50;
@@ -298,6 +298,24 @@ export async function addMessage(
     self.updatedAt = createdAt;
     self.heartbeatAt = createdAt;
     return { view: viewFor(state, sessionId), message };
+  });
+}
+
+export async function updateStatusLabel(sessionId: string, label: string): Promise<PairView> {
+  return mutateState((state) => {
+    const pair = pairFor(state, sessionId);
+    const side = pair ? sideFor(pair, sessionId) : undefined;
+    if (!pair || !side) {
+      return viewFor(state, sessionId);
+    }
+
+    const updatedAt = now();
+    const statusLabel = normalizeMessage(label, MAX_STATUS_LENGTH);
+    pair[side].statusLabel = statusLabel || undefined;
+    pair[side].updatedAt = updatedAt;
+    pair[side].heartbeatAt = updatedAt;
+    pair.updatedAt = updatedAt;
+    return viewFor(state, sessionId);
   });
 }
 

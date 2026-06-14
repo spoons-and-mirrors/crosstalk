@@ -142,6 +142,7 @@ export interface PairEndpoint {
   updatedAt: number;
   heartbeatAt: number;
   deletedAt?: number;
+  statusLabel?: string;
   agent?: string;
   model?: ModelRef;
 }

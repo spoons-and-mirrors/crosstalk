@@ -168,8 +168,10 @@ describe('crosstalk plugin', () => {
     expect(hooks.tool?.crosstalk.description).toContain('strategically split work into main and buddy tracks');
     expect(hooks.tool?.crosstalk.args.action.description).toContain('Use send to delegate work');
     expect(hooks.tool?.crosstalk.args.message.description).toContain('priority order');
-    expect(hooks.tool?.crosstalk.args.label.description).toContain('Use this for send/reply');
+    expect(hooks.tool?.crosstalk.args.action.description).toContain('update your status label');
+    expect(hooks.tool?.crosstalk.args.label.description).toContain('Use this for send/reply/status');
     expect(hooks.tool?.crosstalk.args.label.description).toContain('upstream research');
+    expect(hooks.tool?.crosstalk.args.label.description).toContain('still reviewing failing tests');
     expect(hooks.tool?.crosstalk.args.label.description).toContain('timeline markers');
   });
 
@@ -239,6 +241,40 @@ describe('crosstalk plugin', () => {
     const sourceRead = await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('s1'));
     expect(sourceRead).toContain('m2 review result');
     expect(sourceRead).toContain('reviewed it, focus on error handling');
+  });
+
+  test('status with a label updates visible progress for both sides', async () => {
+    const { hooks, history } = await init();
+    history.set('s1', [message('s1', 'start')]);
+
+    await hooks.tool!.crosstalk.execute(
+      { action: 'send', label: 'docs pass', message: 'please review docs while I keep working' },
+      toolContext('s1'),
+    );
+
+    const mainStatus = await hooks.tool!.crosstalk.execute(
+      { action: 'status', label: 'main: editing implementation' },
+      toolContext('s1'),
+    );
+    expect(mainStatus).toContain('Your status label: main: editing implementation');
+    expect(mainStatus).toContain('Buddy status label: not set');
+
+    const buddyStatus = await hooks.tool!.crosstalk.execute(
+      { action: 'status', label: 'buddy: checking docs risks' },
+      toolContext('buddy_1'),
+    );
+    expect(buddyStatus).toContain('Your status label: buddy: checking docs risks');
+    expect(buddyStatus).toContain('Buddy status label: main: editing implementation');
+
+    const refreshedMainStatus = await hooks.tool!.crosstalk.execute({ action: 'status' }, toolContext('s1'));
+    expect(refreshedMainStatus).toContain('Your status label: main: editing implementation');
+    expect(refreshedMainStatus).toContain('Buddy status label: buddy: checking docs risks');
+
+    const state = JSON.parse(await Bun.file(statePath()).text()) as {
+      pairs: Record<string, { source: { statusLabel?: string }; buddy: { statusLabel?: string } }>;
+    };
+    expect(state.pairs.s1.source.statusLabel).toBe('main: editing implementation');
+    expect(state.pairs.s1.buddy.statusLabel).toBe('buddy: checking docs risks');
   });
 
   test('message transform projects crosstalk timeline without full inbound body', async () => {
@@ -315,6 +351,7 @@ describe('crosstalk plugin', () => {
     expect(system[0]).toContain('priority order of the information you need');
     expect(system[0]).toContain('Avoid vague messages');
     expect(system[0]).toContain('should not work for a long time without updating the main session');
+    expect(system[0]).toContain('crosstalk({"action":"status","label":"..."})');
     expect(system[0]).toContain('early useful partial result');
     expect(system[0]).toContain('Do not poll the buddy');
     expect(system[0]).toContain('sleep/wait commands');

@@ -27,7 +27,7 @@ import {
   statusResult,
   wakePrompt,
 } from './prompts';
-import { addMessage, createPair, getPairView, markWake, readMessages, removeSession, syncLocalSessions } from './room';
+import { addMessage, createPair, getPairView, markWake, readMessages, removeSession, syncLocalSessions, updateStatusLabel } from './room';
 import type {
   CommandInput,
   ConfigTransformOutput,
@@ -309,7 +309,8 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
       const action = (args.action || 'status').trim().toLowerCase();
 
       if (action === 'status') {
-        return statusResult(await getPairView(context.sessionID));
+        const label = typeof args.label === 'string' ? args.label : '';
+        return statusResult(label.trim() ? await updateStatusLabel(context.sessionID, label) : await getPairView(context.sessionID));
       }
 
       if (action === 'read') {
