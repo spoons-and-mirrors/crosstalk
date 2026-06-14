@@ -4,6 +4,7 @@ import type { CrosstalkMessage, PairSide, PairView, UserMessage } from './types'
 
 export const MAX_MESSAGE_LENGTH = 10000;
 export const MAX_STATUS_LENGTH = 300;
+export const MAX_LABEL_LENGTH = 120;
 
 export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 # Crosstalk
@@ -11,9 +12,9 @@ export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 You have a parallel coworker session available through the crosstalk tool. Treat it like a second working thread: if you are the user's right arm, the buddy is the left arm. You should strongly consider using it whenever work can proceed in parallel.
 
 Use crosstalk proactively when a task can benefit from delegation, a second opinion, independent research, review, or splitting work while you continue your own part:
-- crosstalk({"action":"send","message":"..."}) sends a full message to your buddy.
+- crosstalk({"action":"send","label":"short task label","message":"..."}) sends a full message to your buddy.
 - crosstalk({"action":"read"}) reads full messages your buddy sent to you.
-- crosstalk({"action":"reply","reply_to":"m1","message":"..."}) replies to a specific message.
+- crosstalk({"action":"reply","reply_to":"m1","label":"short result label","message":"..."}) replies to a specific message.
 - crosstalk({"action":"status"}) checks whether a buddy exists and how many unread messages are waiting.
 
 Coordinate with the buddy like a real coworker. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left.
@@ -26,6 +27,7 @@ export const CROSSTALK_DESCRIPTION =
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
 export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
 export const MESSAGE_ARG_DESCRIPTION = 'Message body for send or reply';
+export const LABEL_ARG_DESCRIPTION = 'Short label for the delegated task or reply, shown in crosstalk history';
 export const REPLY_TO_ARG_DESCRIPTION = 'Message id to reply to, like m1';
 export const LIMIT_ARG_DESCRIPTION = 'Maximum messages to read, default 20';
 
@@ -49,6 +51,14 @@ export function normalizeMessage(text: string, max: number): string {
     return trimmed;
   }
   return `${trimmed.slice(0, max)}... [truncated]`;
+}
+
+export function normalizeLabel(label: string | undefined, fallback: string): string {
+  const value = (label || '').trim() || fallback;
+  if (value.length <= MAX_LABEL_LENGTH) {
+    return value;
+  }
+  return `${value.slice(0, MAX_LABEL_LENGTH)}... [truncated]`;
 }
 
 function sideName(side: PairSide): string {
@@ -124,9 +134,10 @@ export function createTimelineMessages(sessionId: string, messages: CrosstalkMes
     const inbound = message.toSessionId === sessionId;
     const label = inbound ? 'Buddy sent a crosstalk message' : 'You sent a crosstalk message to your buddy';
     const reply = message.replyTo ? ` in reply to ${message.replyTo}` : '';
+    const subject = message.label ? `: ${message.label}` : '';
     const text = inbound
-      ? `${label} (${message.id}${reply}). Use crosstalk({"action":"read"}) to read the full message body if needed.`
-      : `${label} (${message.id}${reply}).`;
+      ? `${label} (${message.id}${reply})${subject}. Use crosstalk({"action":"read"}) to read the full message body if needed.`
+      : `${label} (${message.id}${reply})${subject}.`;
     const messageID = `msg_crosstalk_${message.pairId}_${message.sequence}_${sessionId}`;
 
     return {

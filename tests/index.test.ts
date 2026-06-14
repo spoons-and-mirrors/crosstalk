@@ -9,7 +9,7 @@ import { statePath } from '../src/room';
 import { __resetForTests } from '../src/test-support';
 import type { ConfigTransformOutput, MessagesTransformOutput, OpenCodeSessionClient } from '../src/types';
 
-type CrosstalkArgs = { action: string; message?: string; reply_to?: string; limit?: number };
+type CrosstalkArgs = { action: string; message?: string; label?: string; reply_to?: string; limit?: number };
 type HookMap = Record<string, ((input: unknown, output?: unknown) => Promise<unknown>) | undefined> & {
   tool?: {
     crosstalk: {
@@ -182,7 +182,7 @@ describe('crosstalk plugin', () => {
     history.set('s1', [message('s1', 'start', { agent: 'build', model: { providerID: 'anthropic', modelID: 'claude-sonnet' } })]);
 
     const result = await hooks.tool!.crosstalk.execute(
-      { action: 'send', message: 'please inspect parser edge cases' },
+      { action: 'send', label: 'parser edge cases', message: 'please inspect parser edge cases' },
       toolContext('s1'),
     );
 
@@ -205,7 +205,7 @@ describe('crosstalk plugin', () => {
     };
     expect(state.version).toBe(2);
     expect(state.messages[0].body).toBe('please inspect parser edge cases');
-    expect(state.messages[0].label).toBe('main session -> buddy session');
+    expect(state.messages[0].label).toBe('parser edge cases');
   });
 
   test('read returns full message bodies and reply targets the original sender', async () => {
@@ -213,20 +213,23 @@ describe('crosstalk plugin', () => {
     history.set('s1', [message('s1', 'start')]);
     history.set('buddy_1', [message('buddy_1', 'buddy start')]);
 
-    await hooks.tool!.crosstalk.execute({ action: 'send', message: 'can you review this patch?' }, toolContext('s1'));
+    await hooks.tool!.crosstalk.execute(
+      { action: 'send', label: 'patch review', message: 'can you review this patch?' },
+      toolContext('s1'),
+    );
 
     const read = await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('buddy_1'));
-    expect(read).toContain('m1 main session -> buddy session');
+    expect(read).toContain('m1 patch review');
     expect(read).toContain('can you review this patch?');
 
     const reply = await hooks.tool!.crosstalk.execute(
-      { action: 'reply', reply_to: 'm1', message: 'reviewed it, focus on error handling' },
+      { action: 'reply', reply_to: 'm1', label: 'review result', message: 'reviewed it, focus on error handling' },
       toolContext('buddy_1'),
     );
     expect(reply).toContain('Sent crosstalk message m2');
 
     const sourceRead = await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('s1'));
-    expect(sourceRead).toContain('m2 buddy session -> main session reply to m1');
+    expect(sourceRead).toContain('m2 review result');
     expect(sourceRead).toContain('reviewed it, focus on error handling');
   });
 
@@ -234,7 +237,10 @@ describe('crosstalk plugin', () => {
     const { hooks, history } = await init();
     history.set('s1', [message('s1', 'start')]);
 
-    await hooks.tool!.crosstalk.execute({ action: 'send', message: 'secret body should stay in read output' }, toolContext('s1'));
+    await hooks.tool!.crosstalk.execute(
+      { action: 'send', label: 'secret investigation', message: 'secret body should stay in read output' },
+      toolContext('s1'),
+    );
     await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('buddy_1'));
     await hooks.tool!.crosstalk.execute({ action: 'reply', reply_to: 'm1', message: 'got it' }, toolContext('buddy_1'));
     const last = message('buddy_1', 'continue work');
@@ -245,6 +251,7 @@ describe('crosstalk plugin', () => {
     expect(output.messages).toHaveLength(3);
     expect(output.messages[0].parts[0].synthetic).toBe(true);
     expect(output.messages[0].parts[0].text).toContain('Buddy sent a crosstalk message');
+    expect(output.messages[0].parts[0].text).toContain('secret investigation');
     expect(output.messages[0].parts[0].text).toContain('crosstalk({"action":"read"})');
     expect(output.messages[0].parts[0].text).not.toContain('secret body');
     expect(output.messages[1].parts[0].text).toContain('You sent a crosstalk message to your buddy');

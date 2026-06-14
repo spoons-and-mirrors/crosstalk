@@ -13,7 +13,7 @@ import type {
   PairView,
   WakeCandidate,
 } from './types';
-import { MAX_MESSAGE_LENGTH, crosstalkMessageLabel, normalizeMessage } from './prompts';
+import { MAX_MESSAGE_LENGTH, crosstalkMessageLabel, normalizeLabel, normalizeMessage } from './prompts';
 
 const LOCK_STALE_MS = 10000;
 const LOCK_RETRY_MS = 50;
@@ -247,6 +247,7 @@ export async function addMessage(
   sessionId: string,
   body: string,
   replyTo?: string,
+  label?: string,
 ): Promise<{ view: PairView; message?: CrosstalkMessage; error?: 'not-paired' | 'empty' | 'unknown-reply' | 'target-deleted' }> {
   return mutateState((state) => {
     const pair = pairFor(state, sessionId);
@@ -281,7 +282,7 @@ export async function addMessage(
       id: `m${sequence}`,
       sequence,
       pairId: pair.id,
-      label: crosstalkMessageLabel(selfSide, targetSide, replyTo),
+      label: normalizeLabel(label, crosstalkMessageLabel(selfSide, targetSide, replyTo)),
       fromSide: selfSide,
       toSide: targetSide,
       fromSessionId: self.sessionId,

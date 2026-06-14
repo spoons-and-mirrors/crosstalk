@@ -8,6 +8,7 @@ import {
   CROSSTALK_USAGE,
   ACTION_ARG_DESCRIPTION,
   INVALID_ACTION,
+  LABEL_ARG_DESCRIPTION,
   LIMIT_ARG_DESCRIPTION,
   MESSAGE_ARG_DESCRIPTION,
   MISSING_MESSAGE,
@@ -272,6 +273,7 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
     args: {
       action: tool.schema.string().describe(ACTION_ARG_DESCRIPTION),
       message: tool.schema.string().optional().describe(MESSAGE_ARG_DESCRIPTION),
+      label: tool.schema.string().optional().describe(LABEL_ARG_DESCRIPTION),
       reply_to: tool.schema.string().optional().describe(REPLY_TO_ARG_DESCRIPTION),
       limit: tool.schema.number().optional().describe(LIMIT_ARG_DESCRIPTION),
     },
@@ -297,7 +299,8 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
       }
 
       const view = await ensurePair(client, context.sessionID);
-      const sent = await addMessage(context.sessionID, body, action === 'reply' ? args.reply_to : undefined);
+      const label = typeof args.label === 'string' ? args.label : undefined;
+      const sent = await addMessage(context.sessionID, body, action === 'reply' ? args.reply_to : undefined, label);
       if (sent.error === 'unknown-reply') {
         return UNKNOWN_REPLY;
       }
