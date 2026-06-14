@@ -135,6 +135,34 @@ export function wakePrompt(sender: PairSide): string {
   return `[Crosstalk] New message from your ${sideName(sender)}. Please call crosstalk({"action":"read"}) to read and respond.`;
 }
 
+export function createBuddyAfkMessage(sessionId: string, view: PairView, idleFetches: number, lastUser: UserMessage): UserMessage | undefined {
+  if (!view.pair || !view.buddy) {
+    return undefined;
+  }
+
+  const messageID = `msg_crosstalk_afk_${view.pair.id}_${sessionId}_${idleFetches}_${lastUser.info.id}`;
+  const created = Math.max(Date.now(), (lastUser.info.time?.created || 0) + 1);
+  return {
+    info: {
+      ...lastUser.info,
+      id: messageID,
+      sessionID: sessionId,
+      role: 'user',
+      time: { created, completed: created },
+    },
+    parts: [
+      {
+        id: `part_crosstalk_afk_${view.pair.id}_${sessionId}_${idleFetches}_${lastUser.info.id}`,
+        sessionID: sessionId,
+        messageID,
+        type: 'text',
+        synthetic: true,
+        text: `<crosstalk>Buddy appears AFK: buddy session ${view.buddy.sessionId} has been idle for ${idleFetches} main-session turns. Do something useful about it: give the buddy a clear next task, ask for a prioritized update if work is pending, or continue without waiting if there is no useful buddy work. Do not poll or sleep just to check on it.</crosstalk>`,
+      },
+    ],
+  };
+}
+
 export function buddyBootstrapPrompt(): string {
   return [
     '[Crosstalk] You are the buddy session in a paired crosstalk workflow.',

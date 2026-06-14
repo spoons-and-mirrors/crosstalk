@@ -4,6 +4,7 @@ import type { LocalSession, OpenCodeSessionClient } from './types';
 
 export const localSessions = new Map<string, LocalSession>();
 export const waking = new Set<string>();
+export const buddyIdleFetches = new Map<string, number>();
 
 let poller: ReturnType<typeof setInterval> | undefined;
 let client: OpenCodeSessionClient | undefined;
@@ -27,6 +28,7 @@ export function setClient(value: OpenCodeSessionClient | undefined): void {
 export function resetForTests(): void {
   localSessions.clear();
   waking.clear();
+  buddyIdleFetches.clear();
   client = undefined;
 
   if (!poller) {

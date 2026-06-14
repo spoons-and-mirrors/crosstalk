@@ -20,6 +20,7 @@ import {
   buddyBootstrapPrompt,
   buddyTitle,
   commandStatus,
+  createBuddyAfkMessage,
   createTimelineMessages,
   readResult,
   sendResult,
@@ -41,11 +42,12 @@ import type {
   ToolContext,
   UserMessage,
 } from './types';
-import { getClient, getPoller, localSessions, setClient, setPoller, waking } from './memory';
+import { buddyIdleFetches, getClient, getPoller, localSessions, setClient, setPoller, waking } from './memory';
 
 const POLL_INTERVAL_MS = 1500;
 const COMMAND_HANDLED = '__CROSSTALK_COMMAND_HANDLED__';
 const DEFAULT_READ_LIMIT = 20;
+const BUDDY_AFK_FETCH_THRESHOLD = 10;
 
 function wakeKey(sessionId: string, messageId: string): string {
   return `${sessionId}:${messageId}`;
@@ -267,6 +269,32 @@ function insertTimeline(messages: UserMessage[], timeline: UserMessage[], lastUs
   }
 }
 
+function resetBuddyIdleFetches(pairId: string | undefined): void {
+  if (pairId) {
+    buddyIdleFetches.delete(pairId);
+  }
+}
+
+function maybeCreateBuddyAfkMessage(sessionId: string, view: Awaited<ReturnType<typeof getPairView>>, lastUser: UserMessage): UserMessage | undefined {
+  if (!view.pair || view.selfSide !== 'source' || !view.buddy || view.buddy.deletedAt) {
+    resetBuddyIdleFetches(view.pair?.id);
+    return undefined;
+  }
+
+  if (view.buddy.status !== 'idle' || view.unread.length > 0) {
+    resetBuddyIdleFetches(view.pair.id);
+    return undefined;
+  }
+
+  const idleFetches = (buddyIdleFetches.get(view.pair.id) || 0) + 1;
+  buddyIdleFetches.set(view.pair.id, idleFetches);
+  if (idleFetches < BUDDY_AFK_FETCH_THRESHOLD) {
+    return undefined;
+  }
+
+  return createBuddyAfkMessage(sessionId, view, idleFetches, lastUser);
+}
+
 function createCrosstalkTool(client: OpenCodeSessionClient) {
   return tool({
     description: CROSSTALK_DESCRIPTION,
@@ -313,6 +341,7 @@ function createCrosstalkTool(client: OpenCodeSessionClient) {
       if (sent.error === 'not-paired' || !sent.message) {
         return NOT_PAIRED;
       }
+      resetBuddyIdleFetches(sent.message.pairId);
 
       const targetSessionId = sent.message.toSessionId;
       const local = localSessions.get(targetSessionId);
@@ -384,6 +413,10 @@ const server: Plugin = async (ctx) => {
         createTimelineMessages(lastUser.info.sessionID, view.messages, lastUser),
         lastUser,
       );
+      const afk = maybeCreateBuddyAfkMessage(lastUser.info.sessionID, view, lastUser);
+      if (afk) {
+        output.messages.push(afk);
+      }
     },
 
     event: async ({ event }) => {

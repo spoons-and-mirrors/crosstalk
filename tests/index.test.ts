@@ -265,6 +265,31 @@ describe('crosstalk plugin', () => {
     expect(output.messages[1].parts[0].text).toContain('You sent a crosstalk message to your buddy');
   });
 
+  test('main session gets an AFK reminder after ten buddy-idle message fetches', async () => {
+    const { hooks, history } = await init();
+    history.set('s1', [message('s1', 'start')]);
+
+    await hooks.tool!.crosstalk.execute(
+      { action: 'send', label: 'parallel docs pass', message: 'please work on docs while I keep editing tests' },
+      toolContext('s1'),
+    );
+
+    for (let index = 1; index < 10; index += 1) {
+      const output: MessagesTransformOutput = { messages: [message('s1', `main turn ${index}`)] };
+      await runMessages(hooks, output);
+      expect(output.messages.some((item) => item.parts[0].text?.includes('Buddy appears AFK'))).toBe(false);
+    }
+
+    const output: MessagesTransformOutput = { messages: [message('s1', 'main turn 10')] };
+    await runMessages(hooks, output);
+
+    const afk = output.messages.find((item) => item.parts[0].text?.includes('Buddy appears AFK'));
+    expect(afk?.parts[0].synthetic).toBe(true);
+    expect(afk?.parts[0].text).toContain('has been idle for 10 main-session turns');
+    expect(afk?.parts[0].text).toContain('give the buddy a clear next task');
+    expect(afk?.parts[0].text).toContain('Do not poll or sleep');
+  });
+
   test('adds crosstalk system prompt to normal session requests', async () => {
     const { hooks } = await init();
     const system: string[] = [];
