@@ -279,6 +279,9 @@ describe('crosstalk plugin', () => {
     expect(system[0]).toContain('main track and a buddy track');
     expect(system[0]).toContain('non-conflicting sub-tasks');
     expect(system[0]).toContain('main session remains responsible for final task completion');
+    expect(system[0]).toContain('not a yes-person');
+    expect(system[0]).toContain('challenge questionable assumptions');
+    expect(system[0]).toContain('cooperative truth-seeking');
     expect(system[0]).toContain('Do not assume the buddy has your full conversation context');
     expect(system[0]).toContain('self-contained handoff');
     expect(system[0]).toContain('include enough context');
