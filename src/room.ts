@@ -13,7 +13,7 @@ import type {
   PairView,
   WakeCandidate,
 } from './types';
-import { MAX_MESSAGE_LENGTH, normalizeMessage } from './prompts';
+import { MAX_MESSAGE_LENGTH, crosstalkMessageLabel, normalizeMessage } from './prompts';
 
 const LOCK_STALE_MS = 10000;
 const LOCK_RETRY_MS = 50;
@@ -115,6 +115,9 @@ function cleanupState(state: CrosstalkState): void {
   const cutoff = now() - MESSAGE_TTL_MS;
   const pairIds = new Set(Object.keys(state.pairs));
   state.messages = state.messages.filter((message) => pairIds.has(message.pairId) && message.createdAt >= cutoff);
+  for (const message of state.messages) {
+    message.label ||= crosstalkMessageLabel(message.fromSide, message.toSide, message.replyTo);
+  }
 }
 
 async function ensureStateDir(): Promise<void> {
@@ -278,6 +281,7 @@ export async function addMessage(
       id: `m${sequence}`,
       sequence,
       pairId: pair.id,
+      label: crosstalkMessageLabel(selfSide, targetSide, replyTo),
       fromSide: selfSide,
       toSide: targetSide,
       fromSessionId: self.sessionId,

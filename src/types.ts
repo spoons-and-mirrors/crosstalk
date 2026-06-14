@@ -150,6 +150,7 @@ export interface CrosstalkMessage {
   id: string;
   sequence: number;
   pairId: string;
+  label: string;
   fromSide: PairSide;
   toSide: PairSide;
   fromSessionId: string;

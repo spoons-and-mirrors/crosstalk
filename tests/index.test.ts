@@ -199,9 +199,13 @@ describe('crosstalk plugin', () => {
     ]);
     expect(prompts.some((prompt) => prompt.id === 'buddy_1' && prompt.body.parts[0].text?.includes('buddy session'))).toBe(true);
 
-    const state = JSON.parse(await Bun.file(statePath()).text()) as { version: number; messages: Array<{ body: string }> };
+    const state = JSON.parse(await Bun.file(statePath()).text()) as {
+      version: number;
+      messages: Array<{ body: string; label: string }>;
+    };
     expect(state.version).toBe(2);
     expect(state.messages[0].body).toBe('please inspect parser edge cases');
+    expect(state.messages[0].label).toBe('main session -> buddy session');
   });
 
   test('read returns full message bodies and reply targets the original sender', async () => {
@@ -212,7 +216,7 @@ describe('crosstalk plugin', () => {
     await hooks.tool!.crosstalk.execute({ action: 'send', message: 'can you review this patch?' }, toolContext('s1'));
 
     const read = await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('buddy_1'));
-    expect(read).toContain('m1 from main session');
+    expect(read).toContain('m1 main session -> buddy session');
     expect(read).toContain('can you review this patch?');
 
     const reply = await hooks.tool!.crosstalk.execute(
@@ -222,7 +226,7 @@ describe('crosstalk plugin', () => {
     expect(reply).toContain('Sent crosstalk message m2');
 
     const sourceRead = await hooks.tool!.crosstalk.execute({ action: 'read' }, toolContext('s1'));
-    expect(sourceRead).toContain('m2 from buddy session reply to m1');
+    expect(sourceRead).toContain('m2 buddy session -> main session reply to m1');
     expect(sourceRead).toContain('reviewed it, focus on error handling');
   });
 
@@ -253,6 +257,8 @@ describe('crosstalk plugin', () => {
     await runSystem(hooks, 'new-session', system);
 
     expect(system[0]).toContain('parallel coworker session');
+    expect(system[0]).toContain('second working thread');
+    expect(system[0]).toContain('non-conflicting sub-tasks');
     expect(system[0]).toContain('crosstalk({"action":"read"})');
   });
 

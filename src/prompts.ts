@@ -8,19 +8,21 @@ export const MAX_STATUS_LENGTH = 300;
 export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 # Crosstalk
 
-You have a parallel coworker session available through the crosstalk tool.
+You have a parallel coworker session available through the crosstalk tool. Treat it like a second working thread: if you are the user's right arm, the buddy is the left arm. You should strongly consider using it whenever work can proceed in parallel.
 
-Use crosstalk when a task can benefit from delegation, a second opinion, or parallel research:
+Use crosstalk proactively when a task can benefit from delegation, a second opinion, independent research, review, or splitting work while you continue your own part:
 - crosstalk({"action":"send","message":"..."}) sends a full message to your buddy.
 - crosstalk({"action":"read"}) reads full messages your buddy sent to you.
 - crosstalk({"action":"reply","reply_to":"m1","message":"..."}) replies to a specific message.
 - crosstalk({"action":"status"}) checks whether a buddy exists and how many unread messages are waiting.
 
+Coordinate with the buddy like a real coworker. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left.
+
 Your buddy is another OpenCode session with the same agent and model. The buddy is created automatically the first time you send or reply. If you are notified that crosstalk has unread messages, call crosstalk({"action":"read"}) before continuing.
 </instructions>`;
 
 export const CROSSTALK_DESCRIPTION =
-  'Send messages to, read from, or reply to your paired crosstalk buddy session.';
+  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: delegate non-conflicting sub-tasks, read full replies, and keep both sessions working hand in hand.';
 export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
 export const ACTION_ARG_DESCRIPTION = 'One of: send, read, reply, status';
 export const MESSAGE_ARG_DESCRIPTION = 'Message body for send or reply';
@@ -51,6 +53,11 @@ export function normalizeMessage(text: string, max: number): string {
 
 function sideName(side: PairSide): string {
   return side === 'source' ? 'main session' : 'buddy session';
+}
+
+export function crosstalkMessageLabel(fromSide: PairSide, toSide: PairSide, replyTo?: string): string {
+  const reply = replyTo ? ` reply to ${replyTo}` : '';
+  return `${sideName(fromSide)} -> ${sideName(toSide)}${reply}`;
 }
 
 function endpointStatus(endpoint: PairView['self']): string {
@@ -93,8 +100,7 @@ export function readResult(view: PairView, limit: number): string {
 
   const lines = ['Crosstalk messages:'];
   for (const message of visible) {
-    const label = message.replyTo ? ` reply to ${message.replyTo}` : '';
-    lines.push(`- ${message.id} from ${sideName(message.fromSide)}${label}:`);
+    lines.push(`- ${message.id} ${message.label || crosstalkMessageLabel(message.fromSide, message.toSide, message.replyTo)}:`);
     lines.push(message.body);
   }
   return lines.join('\n');
@@ -107,8 +113,8 @@ export function wakePrompt(sender: PairSide): string {
 export function buddyBootstrapPrompt(): string {
   return [
     '[Crosstalk] You are the buddy session in a paired crosstalk workflow.',
-    'A coworker session may delegate work, ask questions, or request review through the crosstalk tool.',
-    'When prompted about new crosstalk messages, call crosstalk({"action":"read"}) to read the full message body and reply if useful.',
+    'Treat the main session as your parallel coworker. It may delegate research, implementation, review, or follow-up work while it continues its own track.',
+    'When prompted about new crosstalk messages, call crosstalk({"action":"read"}) to read the full message body, do the requested non-conflicting work, and reply with concise findings or results.',
   ].join('\n');
 }
 
