@@ -1,19 +1,18 @@
-// This file owns user-visible strings and model-visible crosstalk timeline text.
-
-import type { CrosstalkMessage, PairSide, PairView, UserMessage } from './types';
-
-export const MAX_MESSAGE_LENGTH = 10000;
-export const MAX_STATUS_LENGTH = 300;
-export const MAX_LABEL_LENGTH = 120;
+import type { CrosstalkMessage, PairSide, PairView, UserMessage } from '../types';
+import { sideName } from './tool';
 
 export const SYSTEM_PROMPT = `<instructions tool="crosstalk">
 # Crosstalk
 
-You have a parallel coworker session available through the crosstalk tool. Treat it like a second working thread: if you are the user's right arm, the buddy is the left arm. You should strongly consider using it whenever work can proceed in parallel.
+You have a parallel coworker session available through the crosstalk tool. Treat it like a second working thread when that materially helps the user's goal.
 
-Think strategically as a two-person team of capable, cooperative peers, friends, and equals working toward the user's goal. Before and during substantial work, ask yourself: "What can I do while the buddy does something else useful?" Divide work deliberately so both sessions can make progress without stepping on each other.
+Use crosstalk only when the coordination cost is outweighed by clear value: reducing wall-clock time on substantial work, getting an independent review, splitting genuinely non-conflicting implementation/test/research tracks, or unblocking uncertainty. Do not delegate just because the tool exists.
 
-Use the buddy as real parallel capacity, not as an afterthought. For multi-step tasks, actively look for a main track and a buddy track: one session can inspect implementation while the other updates tests, one can research upstream while the other edits local code, one can review risks while the other verifies behavior. Pick splits that reduce wall-clock time and avoid conflicts.
+Do not use crosstalk for small, local, obvious, or single-threaded tasks where you can make progress directly: reading one or two files, making a small edit, answering a narrow question, or making a decision from already-available context. The topic does not matter; use the same value/coordination-cost judgment for every task.
+
+Think strategically as a two-person team of capable, cooperative peers working toward the user's goal. Before and during substantial work, ask yourself: "Would a buddy materially improve speed, quality, or confidence here?" If yes, divide work deliberately so both sessions can make progress without stepping on each other. If no, keep working directly.
+
+When crosstalk is worth using, use the buddy as real parallel capacity, not as an afterthought. For multi-step tasks, look for a main track and a buddy track: one session can inspect implementation while the other updates tests, one can research upstream while the other edits local code, one can review risks while the other verifies behavior. Pick splits that reduce wall-clock time and avoid conflicts.
 
 Use crosstalk proactively when a task can benefit from delegation, a second opinion, independent research, review, or splitting work while you continue your own part:
 - crosstalk({"action":"send","label":"short task label","message":"..."}) sends a full message to your buddy.
@@ -21,7 +20,7 @@ Use crosstalk proactively when a task can benefit from delegation, a second opin
 - crosstalk({"action":"reply","reply_to":"m1","label":"short result label","message":"..."}) replies to a specific message.
 - crosstalk({"action":"status","label":"short current status"}) updates your current status label and shows both sides' status.
 
-Coordinate with the buddy like a real coworker, friend, and equal. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work if there is still parallelizable work left. The main session remains responsible for final task completion and should integrate the buddy's work instead of assuming the buddy handled everything.
+Coordinate with the buddy like a real coworker and equal. Give it clear, non-conflicting sub-tasks; keep doing useful main-session work while it runs; read its replies when notified; then fold useful results back into your own work or delegate more follow-up work only if there is still meaningful parallel work left. The main session remains responsible for final task completion and should integrate the buddy's work instead of assuming the buddy handled everything.
 
 The buddy is not a yes-person. It should balance the main session responsibly and honestly: challenge questionable assumptions, flag conflicts or risky plans, point out missing context, say when it is uncertain, and recommend a better path when it sees one. The goal is cooperative truth-seeking and task completion, not agreement for its own sake.
 
@@ -33,109 +32,6 @@ Do not poll the buddy. After sending work, do not run sleep/wait commands, repea
 
 Your buddy is another OpenCode session with the same agent and model. The buddy is created automatically the first time you send or reply. If you are notified that crosstalk has unread messages, call crosstalk({"action":"read"}) before continuing.
 </instructions>`;
-
-export const CROSSTALK_DESCRIPTION =
-  'Coordinate with your paired crosstalk buddy session as a true parallel coworker: strategically split work into main and buddy tracks, send self-contained context-rich handoffs with priority order for non-conflicting sub-tasks, keep doing your own useful work, and do not poll/wait for the buddy unless you are completely blocked.';
-export const CROSSTALK_COMMAND_DESCRIPTION = 'Show crosstalk buddy status';
-export const ACTION_ARG_DESCRIPTION =
-  'Required action. Use send to delegate work, read to fetch full buddy messages, reply to answer a specific message, or status to inspect the pair and optionally update your status label.';
-export const MESSAGE_ARG_DESCRIPTION =
-  'Message body for send or reply. Include enough context, goal, constraints, ownership boundaries, priority order, and requested result for the buddy to work independently and report useful partial progress on longer tasks.';
-export const LABEL_ARG_DESCRIPTION =
-  'Use this for send/reply/status: a short label like "upstream research", "test review", "implementation pass", "risk check", or "still reviewing failing tests". For status, this becomes your visible current status label. Shown in crosstalk history, status, and timeline markers.';
-export const REPLY_TO_ARG_DESCRIPTION = 'Message id to reply to, like m1';
-export const LIMIT_ARG_DESCRIPTION = 'Maximum messages to read, default 20';
-
-export const CROSSTALK_USAGE =
-  'Usage: /crosstalk. The crosstalk tool is always available; a buddy session is created on first send or reply.';
-export const INVALID_ACTION = 'Error: action must be one of send, read, reply, status.';
-export const MISSING_MESSAGE = "Error: 'message' parameter is required for send or reply.";
-export const UNKNOWN_REPLY = 'Error: Unknown reply target. Use crosstalk read to see message IDs.';
-export const TARGET_DELETED =
-  'Error: crosstalk buddy session was deleted. Existing crosstalk history is still available with read/status, but new messages cannot be delivered to that session.';
-export const NOT_PAIRED = 'Error: crosstalk buddy is not paired.';
-export const NO_PAIR = 'No crosstalk buddy exists yet. Send a message with the crosstalk tool to create one.';
-
-export function buddyTitle(sessionId: string): string {
-  return `crosstalk buddy for ${sessionId}`;
-}
-
-export function normalizeMessage(text: string, max: number): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= max) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, max)}... [truncated]`;
-}
-
-export function normalizeLabel(label: string | undefined, fallback: string): string {
-  const value = (label || '').trim() || fallback;
-  if (value.length <= MAX_LABEL_LENGTH) {
-    return value;
-  }
-  return `${value.slice(0, MAX_LABEL_LENGTH)}... [truncated]`;
-}
-
-function sideName(side: PairSide): string {
-  return side === 'source' ? 'main session' : 'buddy session';
-}
-
-export function crosstalkMessageLabel(fromSide: PairSide, toSide: PairSide, replyTo?: string): string {
-  const reply = replyTo ? ` reply to ${replyTo}` : '';
-  return `${sideName(fromSide)} -> ${sideName(toSide)}${reply}`;
-}
-
-function endpointStatus(endpoint: PairView['self']): string {
-  if (!endpoint) {
-    return 'unknown';
-  }
-  return endpoint.deletedAt ? `deleted at ${new Date(endpoint.deletedAt).toISOString()}` : endpoint.status;
-}
-
-function endpointStatusLabel(endpoint: PairView['self']): string {
-  return endpoint?.statusLabel || 'not set';
-}
-
-export function commandStatus(view: PairView): string {
-  if (!view.pair || !view.self || !view.buddy || !view.selfSide) {
-    return [NO_PAIR, '', 'The crosstalk tool is available in this session.'].join('\n');
-  }
-
-  return [
-    `Crosstalk pair: ${view.pair.id}`,
-    `You are: ${sideName(view.selfSide)} (${view.self.sessionId})`,
-    `Your status label: ${endpointStatusLabel(view.self)}`,
-    `Buddy: ${sideName(view.buddy.side)} (${view.buddy.sessionId}, ${endpointStatus(view.buddy)})`,
-    `Buddy status label: ${endpointStatusLabel(view.buddy)}`,
-    `Unread messages: ${view.unread.length}`,
-  ].join('\n');
-}
-
-export function statusResult(view: PairView): string {
-  return commandStatus(view);
-}
-
-export function sendResult(messageId: string, buddySessionId: string): string {
-  return [`Sent crosstalk message ${messageId}.`, `Buddy session: ${buddySessionId}`].join('\n');
-}
-
-export function readResult(view: PairView, limit: number): string {
-  if (!view.pair || !view.self) {
-    return NO_PAIR;
-  }
-
-  const visible = view.messages.filter((message) => message.toSessionId === view.self?.sessionId).slice(-limit);
-  if (visible.length === 0) {
-    return 'No crosstalk messages yet.';
-  }
-
-  const lines = ['Crosstalk messages:'];
-  for (const message of visible) {
-    lines.push(`- ${message.id} ${message.label || crosstalkMessageLabel(message.fromSide, message.toSide, message.replyTo)}:`);
-    lines.push(message.body);
-  }
-  return lines.join('\n');
-}
 
 export function wakePrompt(sender: PairSide): string {
   return `[Crosstalk] New message from your ${sideName(sender)}. Please call crosstalk({"action":"read"}) to read and respond.`;

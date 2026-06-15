@@ -165,7 +165,8 @@ describe('crosstalk plugin', () => {
     expect(config.command?.crosstalk?.description).toBe('Show crosstalk buddy status');
     expect(config.command?.crosstalk?.template).toBe('$ARGUMENTS');
     expect(config.experimental?.subagent_tools).toContain('crosstalk');
-    expect(hooks.tool?.crosstalk.description).toContain('strategically split work into main and buddy tracks');
+    expect(hooks.tool?.crosstalk.description).toContain('only when it materially helps');
+    expect(hooks.tool?.crosstalk.description).toContain('do not use crosstalk for small/local tasks');
     expect(hooks.tool?.crosstalk.args.action.description).toContain('Use send to delegate work');
     expect(hooks.tool?.crosstalk.args.message.description).toContain('priority order');
     expect(hooks.tool?.crosstalk.args.action.description).toContain('update your status label');
@@ -339,7 +340,11 @@ describe('crosstalk plugin', () => {
 
     expect(system[0]).toContain('parallel coworker session');
     expect(system[0]).toContain('second working thread');
-    expect(system[0]).toContain('What can I do while the buddy does something else useful?');
+    expect(system[0]).toContain('only when the coordination cost is outweighed by clear value');
+    expect(system[0]).toContain('Do not delegate just because the tool exists');
+    expect(system[0]).toContain('Do not use crosstalk for small, local, obvious, or single-threaded tasks');
+    expect(system[0]).toContain('The topic does not matter');
+    expect(system[0]).toContain('Would a buddy materially improve speed, quality, or confidence here?');
     expect(system[0]).toContain('two-person team');
     expect(system[0]).toContain('real parallel capacity');
     expect(system[0]).toContain('main track and a buddy track');
